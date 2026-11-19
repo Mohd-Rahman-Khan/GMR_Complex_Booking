@@ -1,7 +1,12 @@
-Complex Admin – Rahman	9876500000	123456
-Complex Admin – Vijay	9876500002	123456
-Sport Admin – Cricket	9876510001	123456
-Sport Admin – Football	9876510002	123456
-Sport Admin – Badminton	9876510003	123456
-Sport Admin – Cricket (Complex 2)	9876520001	123456
-Sport Admin – Table Tennis	9876520002	123456
+Complex Admin – Rahman 9876500000 123456
+Complex Admin – Vijay 9876500002 123456
+Sport Admin – Cricket 9876510001 123456
+Sport Admin – Football 9876510002 123456
+Sport Admin – Badminton 9876510003 123456
+Sport Admin – Cricket (Complex 2) 9876520001 123456
+Sport Admin – Table Tennis 9876520002 123456
+
+1- Create slots dynamically for next 3 months like irctc website
+2- If a user want to book for full day or half day that should be also available.
+
+agar koi user today full day k lia book krna chahta h lekin tomorrow sirf 2 hrs ya 4 hrs k lia cricket ka ground book krna h to kaise krenge or admin k prospective se normal days m fees normal krna h lekin weekend p fees zyada krna h yh sb kaise kre. mtlb mjhe dono prospective se sochna h btao kaise kre

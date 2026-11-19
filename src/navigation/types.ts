@@ -32,12 +32,18 @@ export type MainStackParamList = {
 
   SlotBooking: {
     groundId: string;
+    sportId: string;
   };
 
   BookingSummary: {
     groundId: string;
     sportId: string;
     bookingDate: string;
-    slotId: string;
+    startTime: string;
+    endTime: string;
+    startMinutes: number;
+    endMinutes: number;
+    durationMinutes: number;
+    price: number;
   };
 };

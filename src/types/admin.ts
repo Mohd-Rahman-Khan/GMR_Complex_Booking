@@ -1,5 +1,31 @@
-export type AdminRole = 'player' | 'super_admin' | 'complex_admin' | 'sport_admin';
-export type SportId = 'football' | 'cricket' | 'badminton' | 'basketball' | 'table-tennis' | 'volleyball';
+export type AdminRole =
+  | 'player'
+  | 'super_admin'
+  | 'complex_admin'
+  | 'sport_admin';
+
+export type SportId =
+  | 'football'
+  | 'cricket'
+  | 'badminton'
+  | 'basketball'
+  | 'table-tennis'
+  | 'volleyball';
+
+export interface PeakHour {
+  id: string;
+  startTime: string; // 24-hour format: 17:00
+  endTime: string; // 24-hour format: 21:00
+}
+
+export interface SportPricing {
+  weekdayNormalRate: number;
+  weekdayPeakRate: number;
+  weekendNormalRate: number;
+  weekendPeakRate: number;
+  peakHours: PeakHour[];
+  weekendDays: number[]; // Sunday = 0, Saturday = 6
+}
 
 export interface SportSlot {
   id: string;
@@ -15,16 +41,17 @@ export interface ComplexSport {
   sportName: string;
   icon: string;
   pricePerHour: number;
-  /** Exactly one primary subadmin is allowed for this sport in this complex. */
+  pricing: SportPricing;
   primarySubAdminId: string | null;
-  /** Reserved for a future staff feature; not assignable in this version. */
   additionalStaffIds: string[];
   isActive: boolean;
   slots: SportSlot[];
+  bookingWindowDays?: number;
 }
 
 export interface SportsComplex {
   id: string;
+  groundId?: string;
   name: string;
   ownerName: string;
   adminId: string;
@@ -43,10 +70,9 @@ export interface SportAdminUser {
   name: string;
   email: string;
   phone: string;
-  password: string; // Demo only; production must use secure backend authentication.
+  password: string;
   role: 'sport_admin' | 'complex_admin';
   complexId: string;
-  /** One sport per subadmin assignment in this demo. */
   assignedSportIds: string[];
   isActive: boolean;
 }

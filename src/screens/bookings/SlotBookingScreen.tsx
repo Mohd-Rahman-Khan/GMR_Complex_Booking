@@ -12,14 +12,26 @@ import {
   View,
 } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
+
 import { MainStackParamList } from '../../navigation/types';
 import { grounds } from '../../data/grounds';
+import { STATIC_BOOKED_SLOTS } from '../../data/bookedSlots';
 import { useBookings } from '../../context/BookingContext';
-import { GeneratedSlot } from '../../types/booking';
-import { generateSlots } from '../../utils/slotGenerator';
+import { useAdmin } from '../../context/AdminContext';
 import DateSelector from '../../components/DateSelector';
+import {
+  generateAvailableStartTimes,
+  timeToMinutes,
+} from '../../services/availabilityService';
+import {
+  calculateDynamicPrice,
+  getSportPricing,
+} from '../../utils/adminPricing';
 
 type Props = NativeStackScreenProps<MainStackParamList, 'SlotBooking'>;
+
+type BookingType = 'halfDay' | 'fullDay' | 'custom';
+
 const P = {
   bg: '#F6F8F5',
   white: '#FFFFFF',
@@ -28,85 +40,284 @@ const P = {
   lime: '#D9F56C',
   muted: '#78877C',
   border: '#E7ECE7',
-  lightGreen: '#EAF5ED',
-  red: '#C76B6B',
 };
+const STATIC_GROUND_UNAVAILABLE_RANGES = [
+  {
+    id: '1',
+    fromDate: '2026-11-23',
+    toDate: '2026-11-23',
+    reason: 'Ground Maintenance',
+  },
+  {
+    id: '2',
+    fromDate: '2026-12-05',
+    toDate: '2026-12-06',
+    reason: 'Tournament',
+  },
+];
+
 const todayISO = () => {
   const d = new Date();
+
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(
     2,
     '0',
   )}-${String(d.getDate()).padStart(2, '0')}`;
 };
+
 const formatDate = (value: string) => {
   const [y, m, d] = value.split('-').map(Number);
+
   return new Date(y, m - 1, d).toLocaleDateString('en-IN', {
     weekday: 'long',
     day: 'numeric',
     month: 'long',
   });
 };
-const formatDuration = (start: number, end: number) => {
-  const total = Math.max(0, end - start);
-  const h = Math.floor(total / 60),
-    m = total % 60;
-  return (
-    [h ? `${h}h` : '', m ? `${m}m` : ''].filter(Boolean).join(' ') || 'Session'
-  );
+
+const money = (value: number) => `₹${value.toLocaleString('en-IN')}`;
+
+const formatHours = (minutes: number) => {
+  const hours = minutes / 60;
+
+  return Number.isInteger(hours)
+    ? `${hours} Hours`
+    : `${hours.toFixed(1)} Hours`;
 };
 
-const SlotBookingScreen = ({ route, navigation }: Props) => {
+export default function SlotBookingScreen({ route, navigation }: Props) {
   const { groundId, sportId } = route.params;
+
   const { bookings, loading } = useBookings();
+  const { complexes } = useAdmin();
+
   const ground = useMemo(
     () => grounds.find(item => item.id === groundId),
     [groundId],
   );
+
   const selectedSport = useMemo(
     () => ground?.sports.find(item => item.sportId === sportId),
     [ground, sportId],
   );
+
   const [selectedDate, setSelectedDate] = useState(todayISO);
-  const [selectedSlotId, setSelectedSlotId] = useState<string | null>(null);
+  const [bookingType, setBookingType] = useState<BookingType>('custom');
+  const [customHours, setCustomHours] = useState(2);
+  const [selectedStart, setSelectedStart] = useState<number | null>(null);
 
-  const slots = useMemo(
-    () =>
-      ground ? generateSlots(ground, sportId, selectedDate, bookings) : [],
-    [ground, sportId, selectedDate, bookings],
-  );
-  const selectedSlot =
-    slots.find(
-      slot => slot.id === selectedSlotId && slot.status === 'available',
-    ) ?? null;
-  const available = slots.filter(slot => slot.status === 'available').length;
-  const booked = slots.filter(slot => slot.status === 'booked').length;
-  const unavailable = slots.filter(
-    slot => slot.status === 'unavailable',
-  ).length;
+  const opening = ground ? timeToMinutes(ground.openingTime) : 0;
+  const closing = ground ? timeToMinutes(ground.closingTime) : 0;
 
-  const onContinue = () => {
-    if (!ground || !selectedSport || !selectedSlot || loading) {
-      Alert.alert('Choose a session', 'Please select an available session.');
+  const availableGroundMinutes = closing - opening;
+
+  // Combine actual bookings and static demo bookings.
+  const allBookings = useMemo(() => {
+    return [...bookings, ...STATIC_BOOKED_SLOTS];
+  }, [bookings]);
+
+  // Admin pricing.
+  const pricing =
+    ground && selectedSport
+      ? getSportPricing(ground, selectedSport, complexes)
+      : null;
+
+  // Maximum custom hours allowed by ground timings.
+  const maxCustomHours = Math.floor(availableGroundMinutes / 60);
+
+  // Calculate duration according to selected booking type.
+  const durationMinutes =
+    bookingType === 'halfDay'
+      ? 4 * 60
+      : bookingType === 'fullDay'
+      ? availableGroundMinutes
+      : customHours * 60;
+
+  const isDurationValid =
+    durationMinutes > 0 &&
+    durationMinutes <= availableGroundMinutes &&
+    (bookingType !== 'halfDay' || availableGroundMinutes >= 240);
+
+  // Already booked slots for selected date, ground and sport.
+  const bookedTimes = useMemo(() => {
+    return allBookings
+      .filter(
+        item =>
+          item.groundId === groundId &&
+          item.sportId === sportId &&
+          item.bookingDate === selectedDate &&
+          item.status === 'confirmed',
+      )
+      .sort((a, b) => a.startMinutes - b.startMinutes);
+  }, [allBookings, groundId, sportId, selectedDate]);
+
+  // Generate available start times after excluding overlapping bookings.
+  const availableTimes = useMemo(() => {
+    if (!ground || !isDurationValid) {
+      return [];
+    }
+
+    return generateAvailableStartTimes({
+      openingTime: ground.openingTime,
+      closingTime: ground.closingTime,
+      durationMinutes,
+      bookings: allBookings,
+      selectedDate,
+      groundId,
+      sportId,
+    });
+  }, [
+    ground,
+    durationMinutes,
+    allBookings,
+    selectedDate,
+    groundId,
+    sportId,
+    isDurationValid,
+  ]);
+
+  const selectedTime =
+    availableTimes.find(item => item.startMinutes === selectedStart) || null;
+
+  // Before the user selects a time, show an estimate for the first
+  // available start time. Once selected, the price follows that exact time.
+  const pricingStartMinutes =
+    selectedTime?.startMinutes ?? availableTimes[0]?.startMinutes ?? opening;
+
+  const pricingCalculation = useMemo(() => {
+    if (!pricing || !isDurationValid) {
+      return { total: 0, breakdown: [] };
+    }
+
+    return calculateDynamicPrice(
+      pricing,
+      selectedDate,
+      pricingStartMinutes,
+      durationMinutes,
+    );
+  }, [
+    pricing,
+    selectedDate,
+    pricingStartMinutes,
+    durationMinutes,
+    isDurationValid,
+  ]);
+
+  const price = pricingCalculation.total;
+
+  const displayTime = (minutes: number) => {
+    const normalized = minutes % 1440;
+    const hour = Math.floor(normalized / 60);
+    const minute = normalized % 60;
+    const suffix = hour >= 12 ? 'PM' : 'AM';
+    const displayHour = hour % 12 || 12;
+    return `${String(displayHour).padStart(2, '0')}:${String(minute).padStart(
+      2,
+      '0',
+    )} ${suffix}`;
+  };
+
+  // Morning, Afternoon and Evening groups.
+  const slotGroups = useMemo(() => {
+    const groups = [
+      {
+        key: 'morning',
+        title: 'Morning',
+        subtitle: 'Opening – 12 PM',
+        icon: '🌅',
+        start: opening,
+        end: Math.min(12 * 60, closing),
+      },
+      {
+        key: 'afternoon',
+        title: 'Afternoon',
+        subtitle: '12 PM – 5 PM',
+        icon: '☀️',
+        start: Math.max(12 * 60, opening),
+        end: Math.min(17 * 60, closing),
+      },
+      {
+        key: 'evening',
+        title: 'Evening',
+        subtitle: '5 PM – Closing',
+        icon: '🌆',
+        start: Math.max(17 * 60, opening),
+        end: closing,
+      },
+    ];
+
+    return groups
+      .map(group => ({
+        ...group,
+        slots: availableTimes.filter(
+          item =>
+            item.startMinutes >= group.start && item.startMinutes < group.end,
+        ),
+      }))
+      .filter(group => group.slots.length > 0);
+  }, [availableTimes, opening, closing]);
+
+  const changeCustomHours = (value: number) => {
+    if (value < 1 || value > maxCustomHours) {
       return;
     }
+
+    setCustomHours(value);
+    setSelectedStart(null);
+  };
+
+  const changeBookingType = (type: BookingType) => {
+    setBookingType(type);
+    setSelectedStart(null);
+  };
+
+  const onContinue = () => {
+    if (!ground || !selectedSport || loading) {
+      return;
+    }
+
+    if (!isDurationValid) {
+      Alert.alert(
+        'Invalid duration',
+        'Selected duration is not available for this ground.',
+      );
+      return;
+    }
+
+    if (!selectedTime) {
+      Alert.alert('Select a time', 'Please select an available start time.');
+      return;
+    }
+
+    if (price <= 0) {
+      Alert.alert(
+        'Price not configured',
+        'Please ask the complex admin to configure pricing for this sport.',
+      );
+      return;
+    }
+
     navigation.navigate('BookingSummary', {
       groundId: ground.id,
       sportId: selectedSport.sportId,
       bookingDate: selectedDate,
-      slotId: selectedSlot.id,
+      startTime: selectedTime.startTime,
+      endTime: selectedTime.endTime,
+      startMinutes: selectedTime.startMinutes,
+      endMinutes: selectedTime.endMinutes,
+      durationMinutes,
+      price,
     });
   };
 
   if (!ground || !selectedSport) {
     return (
       <SafeAreaView style={styles.container}>
-        <View style={styles.missing}>
-          <Text style={styles.missingTitle}>Sport or venue not found</Text>
-          <TouchableOpacity
-            onPress={() => navigation.goBack()}
-            style={styles.missingButton}
-          >
-            <Text style={styles.missingButtonText}>Go back</Text>
+        <View style={styles.center}>
+          <Text style={styles.title}>Sport or venue not found</Text>
+
+          <TouchableOpacity onPress={() => navigation.goBack()}>
+            <Text style={styles.backText}>Go back</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -116,211 +327,418 @@ const SlotBookingScreen = ({ route, navigation }: Props) => {
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor={P.bg} />
+
+      {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity
           onPress={() => navigation.goBack()}
           style={styles.backButton}
         >
-          <Text style={styles.backArrow}>‹</Text>
+          <Text style={styles.backText}>‹</Text>
         </TouchableOpacity>
+
         <Text style={styles.headerTitle}>Reserve your game</Text>
-        <View style={styles.headerPlaceholder} />
+
+        <View style={{ width: 42 }} />
       </View>
 
       <ScrollView
-        showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
       >
+        {/* Venue Information */}
         <View style={styles.venueCard}>
           <Image
-            source={{ uri: selectedSport.image || ground.image }}
-            style={styles.venueImage}
+            source={{
+              uri: selectedSport.image || ground.image,
+            }}
+            style={styles.image}
           />
-          <View style={styles.venueDetails}>
-            <View style={styles.sportBadge}>
-              <Text style={styles.sportBadgeText}>
-                {selectedSport.icon} {selectedSport.sportName}
-              </Text>
-            </View>
+
+          <View style={{ flex: 1, paddingLeft: 13 }}>
+            <Text style={styles.sport}>
+              {selectedSport.icon} {selectedSport.sportName}
+            </Text>
+
             <Text style={styles.venueName}>{ground.name}</Text>
-            <Text style={styles.venueLocation}>⌖ {ground.location}</Text>
-            <Text style={styles.venueHours}>
+
+            <Text style={styles.venueMuted}>⌖ {ground.location}</Text>
+
+            <Text style={styles.venueMuted}>
               ◷ {ground.openingTime} – {ground.closingTime}
             </Text>
           </View>
         </View>
 
-        <View style={styles.sectionHeader}>
-          <View>
-            <Text style={styles.eyebrow}>STEP 01 · PICK A DAY</Text>
-            <Text style={styles.sectionTitle}>When are you playing?</Text>
-          </View>
-          <Text style={styles.smallTag}>Next 30 days</Text>
-        </View>
+        {/* Date Selection */}
+        <Text style={styles.eyebrow}>STEP 01 · PICK A DAY</Text>
+
+        <Text style={styles.sectionTitle}>When are you playing?</Text>
+
         <View style={styles.dateCard}>
+          {/* <DateSelector
+            selectedDate={selectedDate}
+            onSelectDate={value => {
+              setSelectedDate(value);
+              setSelectedStart(null);
+            }}
+          /> */}
           <DateSelector
             selectedDate={selectedDate}
             onSelectDate={value => {
               setSelectedDate(value);
-              setSelectedSlotId(null);
+              setSelectedStart(null);
             }}
+            unavailableRanges={STATIC_GROUND_UNAVAILABLE_RANGES}
           />
-          <View style={styles.dateFooter}>
-            <Text style={styles.calendarGlyph}>▦</Text>
-            <Text style={styles.dateText}>{formatDate(selectedDate)}</Text>
-            <Text style={styles.dateCheck}>✓</Text>
-          </View>
+
+          <Text style={styles.dateLabel}>{formatDate(selectedDate)}</Text>
         </View>
 
-        <View style={[styles.sectionHeader, { marginTop: 28 }]}>
-          <View>
-            <Text style={styles.eyebrow}>STEP 02 · PICK A SESSION</Text>
-            <Text style={styles.sectionTitle}>Available sessions</Text>
-          </View>
-          <View style={styles.availablePill}>
-            <View style={styles.greenDot} />
-            <Text style={styles.availablePillText}>{available} open</Text>
-          </View>
-        </View>
-        <View style={styles.legend}>
-          <Text style={styles.legendText}>● Available {available}</Text>
-          <Text style={[styles.legendText, { color: P.red }]}>
-            ● Booked {booked}
-          </Text>
-          <Text style={styles.legendText}>● Past {unavailable}</Text>
-        </View>
+        {/* Booking Type */}
+        <Text style={styles.eyebrow}>STEP 02 · BOOKING TYPE</Text>
 
-        {loading ? (
-          <View style={styles.emptyState}>
-            <ActivityIndicator color={P.forest} size="large" />
-            <Text style={styles.emptyDescription}>Checking sessions…</Text>
-          </View>
-        ) : slots.length === 0 ? (
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyTitle}>No sessions configured</Text>
-            <Text style={styles.emptyDescription}>
-              Please choose another sport or venue.
+        <Text style={styles.sectionTitle}>Choose your booking</Text>
+
+        <View style={styles.bookingTypeContainer}>
+          {/* Half Day */}
+          <TouchableOpacity
+            style={[
+              styles.bookingTypeCard,
+              bookingType === 'halfDay' && styles.bookingTypeActive,
+              availableGroundMinutes < 240 && styles.disabledBookingCard,
+            ]}
+            disabled={availableGroundMinutes < 240}
+            onPress={() => changeBookingType('halfDay')}
+          >
+            <Text style={styles.bookingTypeIcon}>🌤️</Text>
+
+            <Text
+              style={[
+                styles.bookingTypeTitle,
+                bookingType === 'halfDay' && styles.bookingTypeTitleActive,
+              ]}
+            >
+              Half Day
             </Text>
-          </View>
-        ) : (
-          <View style={styles.slotList}>
-            {slots.map((slot: GeneratedSlot, index: number) => {
-              const isAvailable = slot.status === 'available';
-              const isSelected = selectedSlot?.id === slot.id;
-              const label =
-                slot.status === 'booked'
-                  ? 'Booked'
-                  : slot.status === 'unavailable'
-                  ? 'Unavailable'
-                  : 'Available';
-              return (
-                <TouchableOpacity
-                  key={slot.id}
-                  disabled={!isAvailable}
-                  activeOpacity={0.85}
-                  onPress={() => setSelectedSlotId(isSelected ? null : slot.id)}
-                  style={[
-                    styles.slotCard,
-                    isSelected && styles.slotSelected,
-                    !isAvailable && styles.slotDisabled,
-                  ]}
-                >
-                  <View
-                    style={[
-                      styles.slotAccent,
-                      isSelected && styles.slotAccentSelected,
-                    ]}
-                  />
-                  <View style={styles.slotContent}>
-                    <View style={styles.slotTop}>
-                      <Text style={styles.slotNumber}>
-                        SESSION {String(index + 1).padStart(2, '0')}
-                      </Text>
-                      <Text
-                        style={[
-                          styles.statusText,
-                          !isAvailable && styles.statusTextDisabled,
-                        ]}
-                      >
-                        {isSelected ? '✓ Selected' : label}
-                      </Text>
-                    </View>
-                    <View style={styles.slotMain}>
-                      <View>
-                        <Text style={styles.slotTime}>{slot.startTime}</Text>
-                        <Text style={styles.slotTo}>to {slot.endTime}</Text>
-                      </View>
-                      <View style={styles.slotPriceArea}>
-                        <Text style={styles.slotPrice}>
-                          ₹{slot.price.toLocaleString('en-IN')}
-                        </Text>
-                        <Text style={styles.slotPriceUnit}>per session</Text>
-                      </View>
-                    </View>
-                    <View style={styles.slotBottom}>
-                      <Text style={styles.durationText}>
-                        ◷ {formatDuration(slot.startMinutes, slot.endMinutes)}{' '}
-                        play time
-                      </Text>
-                      <View
-                        style={[
-                          styles.selectCircle,
-                          isSelected && styles.selectCircleActive,
-                        ]}
-                      >
-                        {isSelected && <Text style={styles.checkmark}>✓</Text>}
-                      </View>
-                    </View>
-                  </View>
-                </TouchableOpacity>
-              );
-            })}
+
+            <Text
+              style={[
+                styles.bookingTypeSubtitle,
+                bookingType === 'halfDay' && styles.bookingTypeSubtitleActive,
+              ]}
+            >
+              4 Hours
+            </Text>
+          </TouchableOpacity>
+
+          {/* Full Day */}
+          <TouchableOpacity
+            style={[
+              styles.bookingTypeCard,
+              bookingType === 'fullDay' && styles.bookingTypeActive,
+            ]}
+            onPress={() => changeBookingType('fullDay')}
+          >
+            <Text style={styles.bookingTypeIcon}>☀️</Text>
+
+            <Text
+              style={[
+                styles.bookingTypeTitle,
+                bookingType === 'fullDay' && styles.bookingTypeTitleActive,
+              ]}
+            >
+              Full Day
+            </Text>
+
+            <Text
+              style={[
+                styles.bookingTypeSubtitle,
+                bookingType === 'fullDay' && styles.bookingTypeSubtitleActive,
+              ]}
+            >
+              {formatHours(availableGroundMinutes)}
+            </Text>
+          </TouchableOpacity>
+
+          {/* Custom */}
+          <TouchableOpacity
+            style={[
+              styles.bookingTypeCard,
+              bookingType === 'custom' && styles.bookingTypeActive,
+            ]}
+            onPress={() => changeBookingType('custom')}
+          >
+            <Text style={styles.bookingTypeIcon}>⚙️</Text>
+
+            <Text
+              style={[
+                styles.bookingTypeTitle,
+                bookingType === 'custom' && styles.bookingTypeTitleActive,
+              ]}
+            >
+              Custom
+            </Text>
+
+            <Text
+              style={[
+                styles.bookingTypeSubtitle,
+                bookingType === 'custom' && styles.bookingTypeSubtitleActive,
+              ]}
+            >
+              Your Choice
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Custom Duration */}
+        {bookingType === 'custom' && (
+          <View style={styles.customCard}>
+            <Text style={styles.customTitle}>
+              How many hours do you want to play?
+            </Text>
+
+            <View style={styles.hourSelector}>
+              <TouchableOpacity
+                onPress={() => changeCustomHours(customHours - 1)}
+                disabled={customHours <= 1}
+                style={[
+                  styles.hourButton,
+                  customHours <= 1 && styles.disabledButton,
+                ]}
+              >
+                <Text style={styles.hourButtonText}>−</Text>
+              </TouchableOpacity>
+
+              <View style={styles.hourValueContainer}>
+                <Text style={styles.hourValue}>{customHours}</Text>
+
+                <Text style={styles.hourLabel}>Hours</Text>
+              </View>
+
+              <TouchableOpacity
+                onPress={() => changeCustomHours(customHours + 1)}
+                disabled={customHours >= maxCustomHours}
+                style={[
+                  styles.hourButton,
+                  customHours >= maxCustomHours && styles.disabledButton,
+                ]}
+              >
+                <Text style={styles.hourButtonText}>+</Text>
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.customSubtitle}>
+              Choose your preferred playing duration.
+            </Text>
           </View>
         )}
 
-        <View style={styles.infoNote}>
-          <Text style={styles.noteSymbol}>ⓘ</Text>
-          <Text style={styles.noteText}>
-            Only {selectedSport.sportName} sessions are shown. Booking another
-            sport at this venue will not block these sessions.
+        {/* Dynamic Price Details */}
+        {/* Hourly Price */}
+        <View style={styles.customCard}>
+          <Text style={styles.customTitle}>Hourly Price</Text>
+
+          <View style={styles.customPriceRow}>
+            <Text style={styles.customPriceLabel}>
+              {selectedTime
+                ? `Price for ${selectedTime.startTime} start`
+                : 'Starting hourly price'}
+            </Text>
+
+            <Text style={styles.customTotal}>
+              {money(
+                calculateDynamicPrice(
+                  pricing,
+                  selectedDate,
+                  pricingStartMinutes,
+                  60,
+                ).total,
+              )}{' '}
+              / hr
+            </Text>
+          </View>
+
+          <Text style={styles.customSubtitle}>
+            Price may vary depending on weekday, weekend and peak hours.
           </Text>
         </View>
-        {selectedSlot && (
-          <View style={styles.summaryCard}>
-            <Text style={styles.summaryEyebrow}>YOUR SELECTION</Text>
-            <Text style={styles.summaryTime}>
-              {selectedSport.sportName} · {selectedSlot.startTime} –{' '}
-              {selectedSlot.endTime}
+
+        {/* Already Booked Slots */}
+        <View style={styles.bookedSection}>
+          <View style={styles.bookedHeader}>
+            <View style={styles.groupTitleRow}>
+              <Text style={styles.groupIcon}>🔒</Text>
+
+              <Text style={styles.groupTitle}>Already Booked</Text>
+            </View>
+
+            <Text style={styles.bookedCount}>{bookedTimes.length} Booked</Text>
+          </View>
+
+          {bookedTimes.length === 0 ? (
+            <View style={styles.noBookedCard}>
+              <Text style={styles.noBookedText}>No bookings for this date</Text>
+            </View>
+          ) : (
+            <View style={styles.bookedGrid}>
+              {bookedTimes.map(item => (
+                <View key={item.id} style={styles.bookedCard}>
+                  <View style={styles.bookedTimeRow}>
+                    <Text style={styles.bookedTime}>{item.startTime}</Text>
+
+                    <Text style={styles.bookedLock}>🔒</Text>
+                  </View>
+
+                  <Text style={styles.bookedEnd}>to {item.endTime}</Text>
+
+                  <Text style={styles.bookedStatus}>BOOKED</Text>
+                </View>
+              ))}
+            </View>
+          )}
+        </View>
+
+        {/* Time Selection */}
+        <Text style={styles.eyebrow}>STEP 03 · CHOOSE START TIME</Text>
+
+        <Text style={styles.sectionTitle}>Available start times</Text>
+
+        <Text style={styles.durationHint}>
+          {formatHours(durationMinutes)} session ·
+          {/* End time will be calculated
+          automatically. */}
+        </Text>
+
+        {loading ? (
+          <ActivityIndicator color={P.forest} style={{ marginVertical: 25 }} />
+        ) : !isDurationValid ? (
+          <View style={styles.empty}>
+            <Text style={styles.emptyTitle}>Duration not available</Text>
+
+            <Text style={styles.muted}>
+              This ground does not have enough operating hours for this booking
+              type.
             </Text>
-            <Text style={styles.summaryDate}>{formatDate(selectedDate)}</Text>
+          </View>
+        ) : availableTimes.length === 0 ? (
+          <View style={styles.empty}>
+            <Text style={styles.emptyTitle}>No available times</Text>
+
+            <Text style={styles.muted}>Try another date or duration.</Text>
+          </View>
+        ) : (
+          slotGroups.map(group => (
+            <View key={group.key} style={styles.slotGroup}>
+              <View style={styles.groupHeader}>
+                <View style={styles.groupTitleRow}>
+                  <Text style={styles.groupIcon}>{group.icon}</Text>
+
+                  <Text style={styles.groupTitle}>{group.title}</Text>
+                </View>
+
+                {/* <Text style={styles.groupSubtitle}>{group.subtitle}</Text> */}
+              </View>
+
+              <View style={styles.timeGrid}>
+                {group.slots.map(item => {
+                  const active = selectedStart === item.startMinutes;
+
+                  return (
+                    <TouchableOpacity
+                      key={item.startMinutes}
+                      onPress={() => setSelectedStart(item.startMinutes)}
+                      style={[styles.timeCard, active && styles.timeActive]}
+                    >
+                      <Text
+                        style={[
+                          styles.timeStart,
+                          active && styles.timeStartActive,
+                        ]}
+                      >
+                        {item.startTime}
+                      </Text>
+
+                      <Text
+                        style={[styles.timeEnd, active && styles.timeEndActive]}
+                      >
+                        to {item.endTime}
+                      </Text>
+
+                      {active && (
+                        <Text style={styles.selectedText}>✓ Selected</Text>
+                      )}
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+          ))
+        )}
+
+        {/* Information */}
+        {/* <View style={styles.note}>
+          <Text style={styles.noteText}>
+            • Half Day booking is fixed for 4 hours.
+            {'\n'}• Full Day booking covers the complete ground operating
+            duration.
+            {'\n'}• Custom booking lets you choose your own hours.
+            {'\n'}• Price is calculated using admin-configured weekday, weekend
+            and peak-hour rates.
+            {'\n'}• Start times are available at 60-minute intervals.
+            {'\n'}• Bookings require continuous availability.
+            {'\n'}• A booking blocks only the same sport at this ground.
+            {'\n'}• Booking cannot extend beyond ground closing time.
+          </Text>
+        </View> */}
+
+        {/* Selection Summary */}
+        {selectedTime && (
+          <View style={styles.summary}>
+            <Text style={styles.summaryLabel}>YOUR SELECTION</Text>
+
+            <Text style={styles.summaryTitle}>
+              {selectedTime.startTime} – {selectedTime.endTime}
+            </Text>
+
+            <Text style={styles.summaryDate}>
+              {formatDate(selectedDate)} · {formatHours(durationMinutes)}
+            </Text>
+
+            <Text style={styles.summaryDate}>
+              {bookingType === 'halfDay'
+                ? 'Half Day'
+                : bookingType === 'fullDay'
+                ? 'Full Day'
+                : 'Custom Booking'}
+            </Text>
+
             <View style={styles.summaryDivider} />
-            <View style={styles.summaryPriceRow}>
-              <Text style={styles.summaryPriceLabel}>Session total</Text>
-              <Text style={styles.summaryPrice}>
-                ₹{selectedSlot.price.toLocaleString('en-IN')}
-              </Text>
+
+            <View style={styles.summaryRow}>
+              <Text style={styles.summaryDate}>Session price</Text>
+
+              <Text style={styles.summaryPrice}>{money(price)}</Text>
             </View>
           </View>
         )}
       </ScrollView>
 
-      <View style={styles.bottomBar}>
+      {/* Bottom Bar */}
+      <View style={styles.bottom}>
         <View>
-          <Text style={styles.totalLabel}>
-            {selectedSlot ? 'SESSION TOTAL' : 'SELECT A SESSION'}
-          </Text>
-          <Text style={styles.totalAmount}>
-            {selectedSlot
-              ? `₹${selectedSlot.price.toLocaleString('en-IN')}`
-              : '—'}
-          </Text>
+          <Text style={styles.bottomLabel}>SESSION PRICE</Text>
+          <Text style={styles.bottomPrice}>{money(price)}</Text>
         </View>
+
         <TouchableOpacity
-          disabled={!selectedSlot || loading}
+          disabled={!selectedTime || loading || price <= 0 || !isDurationValid}
           onPress={onContinue}
           style={[
-            styles.continueButton,
-            (!selectedSlot || loading) && styles.continueDisabled,
+            styles.continue,
+            (!selectedTime || loading || price <= 0 || !isDurationValid) && {
+              opacity: 0.45,
+            },
           ]}
         >
           <Text style={styles.continueText}>Continue →</Text>
@@ -328,260 +746,552 @@ const SlotBookingScreen = ({ route, navigation }: Props) => {
       </View>
     </SafeAreaView>
   );
-};
+}
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: P.bg },
+  container: {
+    flex: 1,
+    backgroundColor: P.bg,
+  },
+
   header: {
-    height: 60,
+    height: 58,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 18,
   },
+
   backButton: {
     width: 42,
     height: 42,
-    borderRadius: 14,
+    borderRadius: 13,
     backgroundColor: P.white,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: P.border,
   },
-  backArrow: { fontSize: 32, color: P.dark, lineHeight: 35, marginTop: -4 },
-  headerTitle: { fontSize: 16, fontWeight: '800', color: P.dark },
-  headerPlaceholder: { width: 42 },
-  content: { paddingHorizontal: 18, paddingTop: 12, paddingBottom: 28 },
+
+  backText: {
+    fontSize: 29,
+    color: P.dark,
+  },
+
+  headerTitle: {
+    fontSize: 16,
+    fontWeight: '900',
+    color: P.dark,
+  },
+
+  content: {
+    paddingHorizontal: 18,
+    paddingTop: 12,
+    paddingBottom: 30,
+  },
+
   venueCard: {
     backgroundColor: P.dark,
-    borderRadius: 20,
+    borderRadius: 18,
     padding: 11,
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 28,
+    marginBottom: 25,
   },
-  venueImage: {
-    width: 104,
-    height: 112,
-    borderRadius: 14,
+
+  image: {
+    width: 98,
+    height: 105,
+    borderRadius: 13,
     backgroundColor: '#35533F',
   },
-  venueDetails: { flex: 1, paddingLeft: 13 },
-  sportBadge: {
-    alignSelf: 'flex-start',
-    borderRadius: 6,
-    backgroundColor: P.lime,
-    paddingHorizontal: 8,
-    paddingVertical: 5,
+
+  sport: {
+    color: P.lime,
+    fontSize: 11,
+    fontWeight: '900',
     marginBottom: 7,
   },
-  sportBadgeText: { color: P.dark, fontSize: 9, fontWeight: '900' },
-  venueName: { color: P.white, fontSize: 16, fontWeight: '900' },
-  venueLocation: { color: '#D2E0D5', fontSize: 10, marginTop: 6 },
-  venueHours: { color: '#B9D2BF', fontSize: 10, marginTop: 6 },
-  sectionHeader: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    justifyContent: 'space-between',
-    marginBottom: 13,
-  },
-  eyebrow: {
-    fontSize: 9,
+
+  venueName: {
+    color: P.white,
+    fontSize: 15,
     fontWeight: '900',
-    color: P.forest,
-    letterSpacing: 1.1,
     marginBottom: 6,
   },
-  sectionTitle: { fontSize: 20, fontWeight: '900', color: P.dark },
-  smallTag: { fontSize: 10, color: P.muted, paddingBottom: 3 },
-  dateCard: {
-    backgroundColor: P.white,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: P.border,
-    paddingVertical: 12,
-    overflow: 'hidden',
+
+  venueMuted: {
+    color: '#C7D8CC',
+    fontSize: 10,
+    marginTop: 4,
   },
-  dateFooter: {
-    marginHorizontal: 14,
-    marginTop: 12,
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: P.border,
-    flexDirection: 'row',
-    alignItems: 'center',
+
+  muted: {
+    color: P.muted,
+    fontSize: 10,
+    marginTop: 4,
+    textAlign: 'center',
   },
-  calendarGlyph: { color: P.forest, fontSize: 16, marginRight: 8 },
-  dateText: { fontSize: 12, color: P.dark, fontWeight: '800', flex: 1 },
-  dateCheck: { color: P.forest, fontSize: 15, fontWeight: '900' },
-  availablePill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: P.lightGreen,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderRadius: 18,
+
+  eyebrow: {
+    color: P.forest,
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 1,
+    marginTop: 20,
+    marginBottom: 6,
   },
-  greenDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: P.forest,
-    marginRight: 6,
-  },
-  availablePillText: { color: P.forest, fontSize: 10, fontWeight: '800' },
-  legend: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+
+  sectionTitle: {
+    color: P.dark,
+    fontSize: 19,
+    fontWeight: '900',
     marginBottom: 12,
   },
-  legendText: { color: P.forest, fontSize: 9, fontWeight: '700' },
-  slotList: { gap: 11 },
-  slotCard: {
-    flexDirection: 'row',
+
+  dateCard: {
     backgroundColor: P.white,
     borderRadius: 16,
     borderWidth: 1,
     borderColor: P.border,
-    overflow: 'hidden',
+    paddingVertical: 8,
+    marginBottom: 4,
   },
-  slotSelected: {
-    borderColor: P.forest,
-    borderWidth: 2,
-    backgroundColor: '#F3FAF4',
+
+  dateLabel: {
+    color: P.dark,
+    fontWeight: '800',
+    fontSize: 11,
+    paddingHorizontal: 14,
+    paddingTop: 9,
   },
-  slotDisabled: { opacity: 0.55 },
-  slotAccent: { width: 5, backgroundColor: '#DCE8DE' },
-  slotAccentSelected: { backgroundColor: P.forest },
-  slotContent: { flex: 1, padding: 14 },
-  slotTop: {
+
+  bookingTypeContainer: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    gap: 9,
+    marginBottom: 12,
   },
-  slotNumber: {
-    color: P.muted,
-    fontSize: 9,
-    fontWeight: '900',
-    letterSpacing: 0.8,
-  },
-  statusText: { color: P.forest, fontSize: 10, fontWeight: '800' },
-  statusTextDisabled: { color: P.red },
-  slotMain: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 12,
-  },
-  slotTime: { color: P.dark, fontSize: 19, fontWeight: '900' },
-  slotTo: { color: P.muted, fontSize: 10, marginTop: 3 },
-  slotPriceArea: { alignItems: 'flex-end' },
-  slotPrice: { color: P.forest, fontSize: 19, fontWeight: '900' },
-  slotPriceUnit: { color: P.muted, fontSize: 9, marginTop: 2 },
-  slotBottom: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 12,
-    paddingTop: 10,
-    borderTopWidth: 1,
-    borderTopColor: P.border,
-  },
-  durationText: { color: P.muted, fontSize: 10, fontWeight: '700' },
-  selectCircle: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    borderWidth: 1.5,
-    borderColor: '#B8C5BA',
+
+  bookingTypeCard: {
+    flex: 1,
+    backgroundColor: P.white,
+    borderWidth: 1,
+    borderColor: P.border,
+    borderRadius: 13,
+    paddingVertical: 15,
+    paddingHorizontal: 5,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  selectCircleActive: { backgroundColor: P.forest, borderColor: P.forest },
-  checkmark: { color: P.white, fontSize: 12, fontWeight: '900' },
-  emptyState: {
-    alignItems: 'center',
-    paddingVertical: 35,
-    backgroundColor: P.white,
-    borderRadius: 16,
+
+  bookingTypeActive: {
+    backgroundColor: P.forest,
+    borderColor: P.forest,
   },
-  emptyTitle: { color: P.dark, fontSize: 16, fontWeight: '900' },
-  emptyDescription: { color: P.muted, fontSize: 11, marginTop: 8 },
-  infoNote: {
+
+  disabledBookingCard: {
+    opacity: 0.4,
+  },
+
+  bookingTypeIcon: {
+    fontSize: 22,
+    marginBottom: 8,
+  },
+
+  bookingTypeTitle: {
+    color: P.dark,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+
+  bookingTypeTitleActive: {
+    color: P.white,
+  },
+
+  bookingTypeSubtitle: {
+    color: P.muted,
+    fontSize: 10,
+    marginTop: 5,
+    fontWeight: '700',
+  },
+
+  bookingTypeSubtitleActive: {
+    color: '#E5F5E9',
+  },
+
+  customCard: {
+    backgroundColor: P.white,
+    borderRadius: 15,
+    borderWidth: 1,
+    borderColor: P.border,
+    padding: 15,
+    marginTop: 5,
+    marginBottom: 10,
+  },
+
+  customTitle: {
+    color: P.dark,
+    fontSize: 15,
+    fontWeight: '900',
+  },
+
+  customSubtitle: {
+    color: P.muted,
+    fontSize: 11,
+    textAlign: 'center',
+    marginTop: 4,
+  },
+
+  hourSelector: {
     flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 28,
+    marginVertical: 18,
+  },
+
+  hourButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    backgroundColor: P.forest,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  disabledButton: {
+    backgroundColor: '#B9C7BC',
+  },
+
+  hourButtonText: {
+    color: P.white,
+    fontSize: 25,
+    fontWeight: '700',
+    lineHeight: 29,
+  },
+
+  hourValueContainer: {
+    alignItems: 'center',
+    minWidth: 65,
+  },
+
+  hourValue: {
+    color: P.dark,
+    fontSize: 29,
+    fontWeight: '900',
+  },
+
+  hourLabel: {
+    color: P.muted,
+    fontSize: 11,
+    fontWeight: '700',
+  },
+
+  customPriceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: P.border,
+    marginTop: 8,
+  },
+
+  customPriceLabel: {
+    color: P.muted,
+    fontSize: 11,
+  },
+
+  customPriceValue: {
+    color: P.dark,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+
+  customTotal: {
+    color: P.forest,
+    fontSize: 17,
+    fontWeight: '900',
+  },
+
+  durationHint: {
+    color: P.muted,
+    fontSize: 11,
+    marginTop: -6,
+    marginBottom: 14,
+  },
+
+  bookedSection: {
+    marginTop: 18,
+    marginBottom: 20,
+  },
+
+  bookedHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+
+  bookedCount: {
+    color: '#C24141',
+    fontSize: 10,
+    fontWeight: '900',
+  },
+
+  bookedGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 9,
+  },
+
+  bookedCard: {
+    width: '48%',
+    backgroundColor: '#FCEEEE',
+    borderWidth: 1,
+    borderColor: '#F2CCCC',
+    borderRadius: 12,
+    padding: 13,
+  },
+
+  bookedTimeRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+
+  bookedTime: {
+    color: '#9F3030',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+
+  bookedLock: {
+    fontSize: 12,
+  },
+
+  bookedEnd: {
+    color: '#B66A6A',
+    fontSize: 10,
+    marginTop: 4,
+  },
+
+  bookedStatus: {
+    color: '#C24141',
+    fontSize: 9,
+    fontWeight: '900',
+    marginTop: 8,
+  },
+
+  noBookedCard: {
+    backgroundColor: P.white,
+    borderRadius: 12,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: P.border,
+  },
+
+  noBookedText: {
+    color: P.muted,
+    fontSize: 11,
+    textAlign: 'center',
+  },
+
+  slotGroup: {
+    marginBottom: 18,
+  },
+
+  groupHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+
+  groupTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+  },
+
+  groupIcon: {
+    fontSize: 17,
+  },
+
+  groupTitle: {
+    color: P.dark,
+    fontSize: 15,
+    fontWeight: '900',
+  },
+
+  groupSubtitle: {
+    color: P.muted,
+    fontSize: 10,
+    fontWeight: '700',
+  },
+
+  timeGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 9,
+  },
+
+  timeCard: {
+    width: '48%',
+    backgroundColor: P.white,
+    borderWidth: 1,
+    borderColor: P.border,
+    borderRadius: 12,
+    padding: 13,
+  },
+
+  timeActive: {
+    backgroundColor: P.forest,
+    borderColor: P.forest,
+  },
+
+  timeStart: {
+    color: P.dark,
+    fontSize: 16,
+    fontWeight: '900',
+  },
+
+  timeStartActive: {
+    color: P.white,
+  },
+
+  timeEnd: {
+    color: P.muted,
+    fontSize: 10,
+    marginTop: 4,
+  },
+
+  timeEndActive: {
+    color: '#E5F5E9',
+  },
+
+  selectedText: {
+    color: P.lime,
+    fontSize: 10,
+    fontWeight: '900',
+    marginTop: 6,
+  },
+
+  empty: {
+    backgroundColor: P.white,
+    padding: 20,
+    borderRadius: 13,
+    alignItems: 'center',
+  },
+
+  emptyTitle: {
+    color: P.dark,
+    fontWeight: '900',
+    marginBottom: 5,
+  },
+
+  note: {
     backgroundColor: '#EDF4EE',
     padding: 12,
-    borderRadius: 12,
-    marginTop: 18,
+    borderRadius: 11,
+    marginTop: 8,
   },
-  noteSymbol: { color: P.forest, fontSize: 14, marginRight: 8 },
-  noteText: { flex: 1, color: '#53665A', fontSize: 10, lineHeight: 16 },
-  summaryCard: {
+
+  noteText: {
+    color: '#53665A',
+    fontSize: 10,
+    lineHeight: 17,
+  },
+
+  summary: {
     backgroundColor: P.dark,
-    borderRadius: 16,
-    padding: 16,
+    borderRadius: 15,
+    padding: 15,
     marginTop: 16,
   },
-  summaryEyebrow: {
+
+  summaryLabel: {
     color: P.lime,
     fontSize: 9,
     fontWeight: '900',
     letterSpacing: 1,
   },
-  summaryTime: {
+
+  summaryTitle: {
     color: P.white,
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: '900',
-    marginTop: 10,
+    marginTop: 9,
   },
-  summaryDate: { color: '#C7D8CC', fontSize: 11, marginTop: 5 },
+
+  summaryDate: {
+    color: '#C7D8CC',
+    fontSize: 10,
+    marginTop: 5,
+  },
+
   summaryDivider: {
     height: 1,
     backgroundColor: 'rgba(255,255,255,0.18)',
-    marginVertical: 13,
+    marginVertical: 12,
   },
-  summaryPriceRow: { flexDirection: 'row', justifyContent: 'space-between' },
-  summaryPriceLabel: { color: '#C7D8CC', fontSize: 11 },
-  summaryPrice: { color: P.lime, fontSize: 17, fontWeight: '900' },
-  bottomBar: {
+
+  summaryRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+
+  summaryPrice: {
+    color: P.lime,
+    fontWeight: '900',
+    fontSize: 16,
+  },
+
+  bottom: {
+    backgroundColor: P.white,
+    borderTopWidth: 1,
+    borderTopColor: P.border,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: P.white,
-    paddingHorizontal: 20,
-    paddingVertical: 13,
-    borderTopWidth: 1,
-    borderTopColor: P.border,
   },
-  totalLabel: {
+
+  bottomLabel: {
     color: P.muted,
     fontSize: 8,
     fontWeight: '900',
-    letterSpacing: 0.8,
   },
-  totalAmount: { color: P.dark, fontSize: 21, fontWeight: '900', marginTop: 2 },
-  continueButton: {
+
+  bottomPrice: {
+    color: P.dark,
+    fontSize: 20,
+    fontWeight: '900',
+    marginTop: 3,
+  },
+
+  continue: {
     backgroundColor: P.dark,
-    borderRadius: 13,
-    paddingHorizontal: 25,
+    borderRadius: 12,
+    paddingHorizontal: 24,
     paddingVertical: 14,
   },
-  continueDisabled: { backgroundColor: '#DDE4DE' },
-  continueText: { color: P.white, fontSize: 12, fontWeight: '900' },
-  missing: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  missingTitle: {
+
+  continueText: {
+    color: P.white,
+    fontWeight: '900',
+    fontSize: 12,
+  },
+
+  center: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+
+  title: {
     color: P.dark,
     fontSize: 18,
     fontWeight: '900',
-    marginBottom: 15,
+    marginBottom: 12,
   },
-  missingButton: {
-    backgroundColor: P.dark,
-    paddingHorizontal: 22,
-    paddingVertical: 12,
-    borderRadius: 10,
-  },
-  missingButtonText: { color: P.white, fontWeight: '800' },
 });
-export default SlotBookingScreen;

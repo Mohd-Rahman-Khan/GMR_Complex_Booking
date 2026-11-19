@@ -1,17 +1,230 @@
-import React,{useState} from 'react';
-import {Alert,ScrollView,StatusBar,Text,TextInput,TouchableOpacity,View} from 'react-native';
-import {NativeStackScreenProps} from '@react-navigation/native-stack';
-import {useAdmin} from '../../context/AdminContext';
-import {AdminStackParamList} from '../../navigation/AdminStack';
-type Props=NativeStackScreenProps<AdminStackParamList,'SubadminManagement'>;const G='#14532D',BG='#F4F7F4';
-export default function SubadminManagementScreen({route,navigation}:Props){
- const {complexes,admins,saveAdmin,toggleAdmin}=useAdmin();const c=complexes.find(x=>x.id===route.params.complexId);const [show,setShow]=useState(false);const [name,setName]=useState(''),[email,setEmail]=useState(''),[phone,setPhone]=useState('');
- if(!c)return <View style={S.center}><Text>Complex not found</Text></View>;
- const team=admins.filter(a=>a.complexId===c.id&&a.role==='sport_admin');
- const create=()=>{const e=email.trim().toLowerCase();if(!name.trim()||!e||!phone.trim())return Alert.alert('Required','Name, email and phone are required.');if(admins.some(a=>a.email.toLowerCase()===e))return Alert.alert('Email exists','This email is already registered.');saveAdmin({name:name.trim(),email:e,phone:phone.trim(),password:'123456',role:'sport_admin',complexId:c.id,assignedSportIds:[],isActive:true});setName('');setEmail('');setPhone('');setShow(false);Alert.alert('Created','Demo subadmin created. Temporary password: 123456');};
- return <View style={{flex:1,backgroundColor:BG}}><StatusBar barStyle="light-content" backgroundColor={G}/><View style={S.header}><TouchableOpacity onPress={()=>navigation.goBack()}><Text style={S.back}>‹</Text></TouchableOpacity><View><Text style={S.title}>Subadmin Team</Text><Text style={S.subhead}>{c.name} • {team.length} members</Text></View></View><ScrollView contentContainerStyle={{padding:17,paddingBottom:35}}>{team.map(a=>{const sport=c.sports.find(s=>s.primarySubAdminId===a.id);return <View key={a.id} style={S.card}><View style={S.row}><View style={S.avatar}><Text style={S.avatarText}>{a.name[0]?.toUpperCase()}</Text></View><View style={{flex:1}}><Text style={S.name}>{a.name}</Text><Text style={S.email}>{a.email}</Text></View><TouchableOpacity onPress={()=>Alert.alert('Account status',`${a.isActive?'Deactivate':'Activate'} ${a.name}?`,[{text:'Cancel',style:'cancel'},{text:'Confirm',onPress:()=>toggleAdmin(a.id)}])}><Text style={{color:a.isActive?G:'#DC2626',fontWeight:'900',fontSize:11}}>{a.isActive?'Active':'Inactive'}</Text></TouchableOpacity></View><Text style={S.role}>{sport?`${sport.icon} ${sport.sportName} • Primary`:'No sport assigned'}</Text><TouchableOpacity onPress={()=>sport?navigation.navigate('SportDetails',{complexId:c.id,sportId:sport.sportId}):navigation.navigate('SportsManagement',{complexId:c.id})}><Text style={S.link}>{sport?'Open managed sport':'Go to sports to assign'} ›</Text></TouchableOpacity></View>})}
- {team.length===0&&<View style={S.empty}><Text style={S.name}>No subadmins yet</Text><Text style={S.email}>Create your first sport subadmin.</Text></View>}
- <TouchableOpacity style={S.button} onPress={()=>setShow(v=>!v)}><Text style={S.buttonText}>{show?'Close form':'＋ Create Subadmin'}</Text></TouchableOpacity>
- {show&&<View style={S.card}><Text style={S.name}>New subadmin account</Text>{[[name,setName,'Full name'],[email,setEmail,'Email address'],[phone,setPhone,'Phone number']].map(([v,set,l]:any)=><TextInput key={l} value={v} onChangeText={set} placeholder={l} keyboardType={l==='Email address'?'email-address':l==='Phone number'?'phone-pad':'default'} autoCapitalize={l==='Email address'?'none':'words'} style={S.input}/>)}<Text style={S.email}>Demo temporary password: 123456</Text><TouchableOpacity style={S.button} onPress={create}><Text style={S.buttonText}>Create Account</Text></TouchableOpacity></View>}</ScrollView></View>
+import React, { useState } from 'react';
+import {
+  Alert,
+  ScrollView,
+  StatusBar,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
+import { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { useAdmin } from '../../context/AdminContext';
+import { AdminStackParamList } from '../../navigation/AdminStack';
+type Props = NativeStackScreenProps<AdminStackParamList, 'SubadminManagement'>;
+const G = '#14532D',
+  BG = '#F4F7F4';
+export default function SubadminManagementScreen({ route, navigation }: Props) {
+  const { complexes, admins, saveAdmin, toggleAdmin } = useAdmin();
+  const c = complexes.find(x => x.id === route.params.complexId);
+  const [show, setShow] = useState(false);
+  const [name, setName] = useState(''),
+    [email, setEmail] = useState(''),
+    [phone, setPhone] = useState('');
+  if (!c)
+    return (
+      <View style={S.center}>
+        <Text>Complex not found</Text>
+      </View>
+    );
+  const team = admins.filter(
+    a => a.complexId === c.id && a.role === 'sport_admin',
+  );
+  const create = () => {
+    const e = email.trim().toLowerCase();
+    if (!name.trim() || !e || !phone.trim())
+      return Alert.alert('Required', 'Name, email and phone are required.');
+    if (admins.some(a => a.email.toLowerCase() === e))
+      return Alert.alert('Email exists', 'This email is already registered.');
+    saveAdmin({
+      name: name.trim(),
+      email: e,
+      phone: phone.trim(),
+      password: '123456',
+      role: 'sport_admin',
+      complexId: c.id,
+      assignedSportIds: [],
+      isActive: true,
+    });
+    setName('');
+    setEmail('');
+    setPhone('');
+    setShow(false);
+    Alert.alert('Created', 'Demo subadmin created. Temporary password: 123456');
+  };
+  return (
+    <View style={{ flex: 1, backgroundColor: BG }}>
+      <StatusBar barStyle="light-content" backgroundColor={G} />
+      <View style={S.header}>
+        <TouchableOpacity onPress={() => navigation.goBack()}>
+          <Text style={S.back}>‹</Text>
+        </TouchableOpacity>
+        <View>
+          <Text style={S.title}>Subadmin Team</Text>
+          <Text style={S.subhead}>
+            {c.name} • {team.length} members
+          </Text>
+        </View>
+      </View>
+      <ScrollView contentContainerStyle={{ padding: 17, paddingBottom: 35 }}>
+        {team.map(a => {
+          const sport = c.sports.find(s => s.primarySubAdminId === a.id);
+          return (
+            <View key={a.id} style={S.card}>
+              <View style={S.row}>
+                <View style={S.avatar}>
+                  <Text style={S.avatarText}>{a.name[0]?.toUpperCase()}</Text>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={S.name}>{a.name}</Text>
+                  <Text style={S.email}>{a.email}</Text>
+                </View>
+                <TouchableOpacity
+                  onPress={() =>
+                    Alert.alert(
+                      'Account status',
+                      `${a.isActive ? 'Deactivate' : 'Activate'} ${a.name}?`,
+                      [
+                        { text: 'Cancel', style: 'cancel' },
+                        { text: 'Confirm', onPress: () => toggleAdmin(a.id) },
+                      ],
+                    )
+                  }
+                >
+                  <Text
+                    style={{
+                      color: a.isActive ? G : '#DC2626',
+                      fontWeight: '900',
+                      fontSize: 11,
+                    }}
+                  >
+                    {a.isActive ? 'Active' : 'Inactive'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+              <Text style={S.role}>
+                {sport
+                  ? `${sport.icon} ${sport.sportName} • Primary`
+                  : 'No sport assigned'}
+              </Text>
+              <TouchableOpacity
+                onPress={() =>
+                  sport
+                    ? navigation.navigate('SportDetails', {
+                        complexId: c.id,
+                        sportId: sport.sportId,
+                      })
+                    : navigation.navigate('SportsManagement', {
+                        complexId: c.id,
+                      })
+                }
+              >
+                <Text style={S.link}>
+                  {sport ? 'Open managed sport' : 'Go to sports to assign'} ›
+                </Text>
+              </TouchableOpacity>
+            </View>
+          );
+        })}
+        {team.length === 0 && (
+          <View style={S.empty}>
+            <Text style={S.name}>No subadmins yet</Text>
+            <Text style={S.email}>Create your first sport subadmin.</Text>
+          </View>
+        )}
+        <TouchableOpacity style={S.button} onPress={() => setShow(v => !v)}>
+          <Text style={S.buttonText}>
+            {show ? 'Close form' : '＋ Create Subadmin'}
+          </Text>
+        </TouchableOpacity>
+        {show && (
+          <View style={S.card}>
+            <Text style={S.name}>New subadmin account</Text>
+            {[
+              [name, setName, 'Full name'],
+              [email, setEmail, 'Email address'],
+              [phone, setPhone, 'Phone number'],
+            ].map(([v, set, l]: any) => (
+              <TextInput
+                key={l}
+                value={v}
+                onChangeText={set}
+                placeholder={l}
+                keyboardType={
+                  l === 'Email address'
+                    ? 'email-address'
+                    : l === 'Phone number'
+                    ? 'phone-pad'
+                    : 'default'
+                }
+                autoCapitalize={l === 'Email address' ? 'none' : 'words'}
+                style={S.input}
+              />
+            ))}
+            <Text style={S.email}>Demo temporary password: 123456</Text>
+            <TouchableOpacity style={S.button} onPress={create}>
+              <Text style={S.buttonText}>Create Account</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+      </ScrollView>
+    </View>
+  );
 }
-const S:any={center:{flex:1,alignItems:'center',justifyContent:'center'},header:{backgroundColor:G,paddingTop:45,paddingHorizontal:20,paddingBottom:18,flexDirection:'row',alignItems:'center',gap:14},back:{color:'#FFF',fontSize:34},title:{color:'#FFF',fontSize:20,fontWeight:'900'},subhead:{color:'#D1FAE5',fontSize:11,marginTop:4},card:{backgroundColor:'#FFF',borderRadius:15,padding:14,marginBottom:11,borderWidth:1,borderColor:'#E4EBE5'},row:{flexDirection:'row',alignItems:'center'},avatar:{width:42,height:42,borderRadius:14,backgroundColor:'#E4F3E5',alignItems:'center',justifyContent:'center',marginRight:11},avatarText:{color:G,fontWeight:'900',fontSize:17},name:{color:'#17251B',fontWeight:'900',fontSize:14},email:{color:'#718078',fontSize:10,marginTop:4},role:{color:G,fontWeight:'800',fontSize:11,marginTop:13},link:{color:G,fontWeight:'900',fontSize:11,marginTop:10},button:{backgroundColor:G,padding:14,borderRadius:12,alignItems:'center',marginTop:8,marginBottom:12},buttonText:{color:'#FFF',fontWeight:'900'},input:{backgroundColor:'#FBFDFC',borderWidth:1,borderColor:'#E4EBE5',borderRadius:11,padding:12,color:'#17251B',marginTop:10},empty:{padding:20,backgroundColor:'#FFF',borderRadius:14}};
+const S: any = {
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  header: {
+    backgroundColor: G,
+    paddingTop: 45,
+    paddingHorizontal: 20,
+    paddingBottom: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+  },
+  back: { color: '#FFF', fontSize: 34 },
+  title: { color: '#FFF', fontSize: 20, fontWeight: '900' },
+  subhead: { color: '#D1FAE5', fontSize: 11, marginTop: 4 },
+  card: {
+    backgroundColor: '#FFF',
+    borderRadius: 15,
+    padding: 14,
+    marginBottom: 11,
+    borderWidth: 1,
+    borderColor: '#E4EBE5',
+  },
+  row: { flexDirection: 'row', alignItems: 'center' },
+  avatar: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    backgroundColor: '#E4F3E5',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 11,
+  },
+  avatarText: { color: G, fontWeight: '900', fontSize: 17 },
+  name: { color: '#17251B', fontWeight: '900', fontSize: 14 },
+  email: { color: '#718078', fontSize: 10, marginTop: 4 },
+  role: { color: G, fontWeight: '800', fontSize: 11, marginTop: 13 },
+  link: { color: G, fontWeight: '900', fontSize: 11, marginTop: 10 },
+  button: {
+    backgroundColor: G,
+    padding: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginTop: 8,
+    marginBottom: 12,
+  },
+  buttonText: { color: '#FFF', fontWeight: '900' },
+  input: {
+    backgroundColor: '#FBFDFC',
+    borderWidth: 1,
+    borderColor: '#E4EBE5',
+    borderRadius: 11,
+    padding: 12,
+    color: '#17251B',
+    marginTop: 10,
+  },
+  empty: { padding: 20, backgroundColor: '#FFF', borderRadius: 14 },
+};

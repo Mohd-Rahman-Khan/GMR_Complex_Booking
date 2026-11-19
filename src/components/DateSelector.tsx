@@ -8,9 +8,17 @@ import {
   View,
 } from 'react-native';
 
+interface UnavailableDateRange {
+  id: string;
+  fromDate: string;
+  toDate: string;
+  reason?: string;
+}
+
 interface DateSelectorProps {
   selectedDate: string;
   onSelectDate: (date: string) => void;
+  unavailableRanges?: UnavailableDateRange[];
 }
 
 interface DateItem {
@@ -29,7 +37,11 @@ const getLocalDateString = (date: Date): string => {
   return `${year}-${month}-${day}`;
 };
 
-const DateSelector = ({ selectedDate, onSelectDate }: DateSelectorProps) => {
+const DateSelector = ({
+  selectedDate,
+  onSelectDate,
+  unavailableRanges = [],
+}: DateSelectorProps) => {
   const dates = useMemo(() => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -67,6 +79,12 @@ const DateSelector = ({ selectedDate, onSelectDate }: DateSelectorProps) => {
     return dateList;
   }, []);
 
+  const isDateUnavailable = (date: string) => {
+    return unavailableRanges.some(
+      range => date >= range.fromDate && date <= range.toDate,
+    );
+  };
+
   return (
     <View style={styles.wrapper}>
       <ScrollView
@@ -76,35 +94,76 @@ const DateSelector = ({ selectedDate, onSelectDate }: DateSelectorProps) => {
       >
         {dates.map(item => {
           const isSelected = selectedDate === item.value;
+          const isUnavailable = isDateUnavailable(item.value);
 
           return (
             <TouchableOpacity
               key={item.value}
-              activeOpacity={0.8}
+              activeOpacity={isUnavailable ? 1 : 0.8}
+              disabled={isUnavailable}
               onPress={() => onSelectDate(item.value)}
-              style={[styles.dateCard, isSelected && styles.selectedDateCard]}
+              style={[
+                styles.dateCard,
+                isUnavailable && styles.unavailableDateCard,
+                isSelected && !isUnavailable && styles.selectedDateCard,
+              ]}
             >
-              <Text style={[styles.dayText, isSelected && styles.selectedText]}>
+              <Text
+                style={[
+                  styles.dayText,
+                  isUnavailable && styles.unavailableText,
+                  isSelected && !isUnavailable && styles.selectedText,
+                ]}
+              >
                 {item.label}
               </Text>
 
               <Text
-                style={[styles.dateText, isSelected && styles.selectedText]}
+                style={[
+                  styles.dateText,
+                  isUnavailable && styles.unavailableText,
+                  isSelected && !isUnavailable && styles.selectedText,
+                ]}
               >
                 {item.date}
               </Text>
 
               <Text
-                style={[styles.monthText, isSelected && styles.selectedText]}
+                style={[
+                  styles.monthText,
+                  isUnavailable && styles.unavailableText,
+                  isSelected && !isUnavailable && styles.selectedText,
+                ]}
               >
                 {item.month}
               </Text>
 
-              {isSelected && <View style={styles.selectedIndicator} />}
+              {isUnavailable ? (
+                <View style={styles.unavailableIndicator} />
+              ) : (
+                isSelected && <View style={styles.selectedIndicator} />
+              )}
             </TouchableOpacity>
           );
         })}
       </ScrollView>
+
+      <View style={styles.legendContainer}>
+        <View style={styles.legendItem}>
+          <View style={styles.availableDot} />
+          <Text style={styles.legendText}>Available</Text>
+        </View>
+
+        <View style={styles.legendItem}>
+          <View style={styles.selectedDot} />
+          <Text style={styles.legendText}>Selected</Text>
+        </View>
+
+        <View style={styles.legendItem}>
+          <View style={styles.unavailableDot} />
+          <Text style={styles.legendText}>Unavailable</Text>
+        </View>
+      </View>
     </View>
   );
 };
@@ -137,6 +196,12 @@ const styles = StyleSheet.create({
     borderColor: '#166534',
   },
 
+  unavailableDateCard: {
+    backgroundColor: '#FEF2F2',
+    borderColor: '#FCA5A5',
+    opacity: 0.9,
+  },
+
   dayText: {
     fontSize: 11,
     color: '#6B7280',
@@ -159,6 +224,10 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
   },
 
+  unavailableText: {
+    color: '#DC2626',
+  },
+
   selectedIndicator: {
     position: 'absolute',
     bottom: 5,
@@ -166,6 +235,54 @@ const styles = StyleSheet.create({
     height: 5,
     borderRadius: 3,
     backgroundColor: '#FFFFFF',
+  },
+
+  unavailableIndicator: {
+    position: 'absolute',
+    bottom: 5,
+    width: 5,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: '#DC2626',
+  },
+
+  legendContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 10,
+    gap: 18,
+  },
+
+  legendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+
+  legendText: {
+    fontSize: 11,
+    color: '#6B7280',
+    marginLeft: 5,
+  },
+
+  availableDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#D1D5DB',
+  },
+
+  selectedDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#166534',
+  },
+
+  unavailableDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#DC2626',
   },
 });
 

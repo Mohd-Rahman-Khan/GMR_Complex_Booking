@@ -48,15 +48,15 @@ export default function AdminDashboardScreen({ route, navigation }: Props) {
   const menu = [
     {
       icon: '🏟️',
-      title: 'My Complex',
+      title: 'Sport Complex',
       subtitle: 'Details, contact information and status',
       count: 'Edit',
       action: () => open('ComplexDetails'),
     },
     {
       icon: '🏅',
-      title: 'Sports & Slots',
-      subtitle: 'Sports, hourly prices, timings and availability',
+      title: 'Sports',
+      subtitle: 'Sports and hourly prices',
       count: `${complex.sports.length} sports`,
       action: () => open('SportsManagement'),
     },

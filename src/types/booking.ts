@@ -26,7 +26,13 @@ export interface Booking {
   startMinutes: number;
   endMinutes: number;
   duration: number;
+  /** Total payable including GST, after coupon discount. */
   amount: number;
+  /** Original admin-configured duration price before discount and GST. */
+  basePrice?: number;
+  couponCode?: string;
+  discountAmount?: number;
+  gstAmount?: number;
   status: BookingStatus;
   createdAt: string;
 }

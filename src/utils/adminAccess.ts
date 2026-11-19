@@ -4,7 +4,10 @@ import { SportAdminUser, SportsComplex } from '../types/admin';
 /**
  * Client-side demo selector. Always repeat this authorization on the backend in production.
  */
-export type ScopedBooking = Booking & { complexId: string };\n\nexport const getBookingsForComplexAdmin = (bookings: ScopedBooking[], complex: SportsComplex) =>\n  bookings.filter(booking => booking.complexId === complex.id);
+export type ScopedBooking = Booking & { complexId: string };
+
+export const getBookingsForComplexAdmin = (bookings: ScopedBooking[], complex: SportsComplex) =>
+  bookings.filter(booking => booking.complexId === complex.id);
 
 export const getBookingsForSportAdmin = (
   bookings: ScopedBooking[],

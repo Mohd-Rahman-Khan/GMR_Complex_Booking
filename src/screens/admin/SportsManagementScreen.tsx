@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   ScrollView,
   StatusBar,
@@ -8,11 +9,13 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { useAdmin } from '../../context/AdminContext';
-import { AVAILABLE_SPORTS, DEFAULT_SPORT_PRICING } from '../../data/adminSeed';
-import { ComplexSport, SportPricing } from '../../types/admin';
+import { useFocusEffect } from '@react-navigation/native';
+
 import { AdminStackParamList } from '../../navigation/AdminStack';
+import { useAuth } from '../../context/AuthContext';
+import { apiRequest } from '../../services/api';
 
 type Props = NativeStackScreenProps<AdminStackParamList, 'SportsManagement'>;
 
@@ -26,11 +29,44 @@ type Draft = {
   weekendPeakRate: string;
 };
 
-const toDraft = (pricing?: SportPricing): Draft => ({
-  weekdayNormalRate: String(pricing?.weekdayNormalRate ?? 0),
-  weekdayPeakRate: String(pricing?.weekdayPeakRate ?? 0),
-  weekendNormalRate: String(pricing?.weekendNormalRate ?? 0),
-  weekendPeakRate: String(pricing?.weekendPeakRate ?? 0),
+type MasterSport = {
+  _id: string;
+  name: string;
+  slug: string;
+  icon?: string;
+  description?: string;
+};
+
+type SportItem = {
+  _id: string;
+  complexId: any;
+  name: string;
+  icon?: string;
+  description?: string;
+  bookingWindowDays?: number;
+  primarySubAdminId?: any;
+  slots?: any[];
+  isActive: boolean;
+  pricing?: {
+    weekdayPrice?: number;
+    weekdayPeakPrice?: number;
+    weekendPrice?: number;
+    weekendPeakPrice?: number;
+    weekendDays?: number[];
+    peakHours?: any[];
+  };
+};
+
+type ComplexItem = {
+  _id: string;
+  name: string;
+};
+
+const toDraft = (pricing?: SportItem['pricing']): Draft => ({
+  weekdayNormalRate: String(pricing?.weekdayPrice ?? 0),
+  weekdayPeakRate: String(pricing?.weekdayPeakPrice ?? 0),
+  weekendNormalRate: String(pricing?.weekendPrice ?? 0),
+  weekendPeakRate: String(pricing?.weekendPeakPrice ?? 0),
 });
 
 const PRICE_FIELDS: { key: keyof Draft; label: string }[] = [
@@ -40,76 +76,96 @@ const PRICE_FIELDS: { key: keyof Draft; label: string }[] = [
   { key: 'weekendPeakRate', label: 'Weekend Peak Hours Price' },
 ];
 
+const getResponseData = (response: any) => {
+  return response?.data ?? response;
+};
+
 export default function SportsManagementScreen({ route, navigation }: Props) {
-  const { complexes, addSport, removeSport, admins, updateSport } = useAdmin();
+  const { token } = useAuth();
 
-  const complex = complexes.find(x => x.id === route.params.complexId);
+  const complexId = route.params.complexId;
 
+  const [complex, setComplex] = useState<ComplexItem | null>(null);
+  const [sports, setSports] = useState<SportItem[]>([]);
+  const [masterSports, setMasterSports] = useState<MasterSport[]>([]);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
 
-  useEffect(() => {
-    if (!complex) return;
+  const [loading, setLoading] = useState(true);
+  const [loadingMasterSports, setLoadingMasterSports] = useState(false);
 
-    const next: Record<string, Draft> = {};
+  const [savingSportId, setSavingSportId] = useState<string | null>(null);
+  const [addingSportId, setAddingSportId] = useState<string | null>(null);
+  const [statusSportId, setStatusSportId] = useState<string | null>(null);
 
-    complex.sports.forEach(s => {
-      next[s.sportId] = toDraft(s.pricing);
-    });
-
-    setDrafts(next);
-  }, [complex?.id, complex?.sports]);
-
-  if (!complex) {
-    return (
-      <View style={S.center}>
-        <Text>Complex not found</Text>
-      </View>
-    );
-  }
-
-  const add = (item: (typeof AVAILABLE_SPORTS)[number]) => {
-    if (complex.sports.some(s => s.sportId === item.id)) {
-      Alert.alert('Already added', 'This sport is already in your complex.');
+  // Load complex, existing sports and master sports
+  const loadData = useCallback(async () => {
+    if (!token) {
+      setLoading(false);
+      Alert.alert('Session Expired', 'Please login again.');
       return;
     }
 
-    const pricing = {
-      ...DEFAULT_SPORT_PRICING[item.id],
-      peakHours: DEFAULT_SPORT_PRICING[item.id].peakHours.map(x => ({
-        ...x,
-      })),
-      weekendDays: [...DEFAULT_SPORT_PRICING[item.id].weekendDays],
-    };
+    try {
+      setLoading(true);
+      setLoadingMasterSports(true);
 
-    const sport: ComplexSport = {
-      id: `CS${Date.now()}`,
-      sportId: item.id,
-      sportName: item.name,
-      icon: item.icon,
-      pricePerHour: pricing.weekdayNormalRate,
-      pricing,
-      primarySubAdminId: null,
-      additionalStaffIds: [],
-      isActive: true,
-      slots: [],
-    };
+      const [complexResponse, sportsResponse, masterSportsResponse] =
+        await Promise.all([
+          apiRequest<any>(`/complexes/${complexId}`, {
+            method: 'GET',
+            token,
+          }),
 
-    addSport(complex.id, sport);
-  };
+          apiRequest<any>('/sports/my', {
+            method: 'GET',
+            token,
+          }),
 
-  const remove = (item: ComplexSport) =>
-    Alert.alert(
-      'Remove sport?',
-      `Remove ${item.sportName} from this complex?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Remove',
-          style: 'destructive',
-          onPress: () => removeSport(complex.id, item.sportId),
-        },
-      ],
-    );
+          apiRequest<any>('/master-sports', {
+            method: 'GET',
+            token,
+          }),
+        ]);
+
+      const complexData = getResponseData(complexResponse);
+      const selectedComplex = complexData?.complex ?? complexData;
+
+      const sportsData = getResponseData(sportsResponse);
+      const allSports = sportsData?.sports ?? [];
+
+      const selectedSports = allSports.filter((sport: SportItem) => {
+        const sportComplexId = sport.complexId?._id ?? sport.complexId;
+
+        return String(sportComplexId) === String(complexId);
+      });
+
+      const masterData = getResponseData(masterSportsResponse);
+      const availableSports = masterData?.sports ?? [];
+
+      setComplex(selectedComplex);
+      setSports(selectedSports);
+      setMasterSports(availableSports);
+
+      const nextDrafts: Record<string, Draft> = {};
+
+      selectedSports.forEach((sport: SportItem) => {
+        nextDrafts[sport._id] = toDraft(sport.pricing);
+      });
+
+      setDrafts(nextDrafts);
+    } catch (error: any) {
+      Alert.alert('Unable to Load', error.message || 'Unable to fetch sports.');
+    } finally {
+      setLoading(false);
+      setLoadingMasterSports(false);
+    }
+  }, [complexId, token]);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadData();
+    }, [loadData]),
+  );
 
   const updateDraft = (sportId: string, key: keyof Draft, value: string) => {
     setDrafts(prev => ({
@@ -121,45 +177,197 @@ export default function SportsManagementScreen({ route, navigation }: Props) {
     }));
   };
 
-  const savePricing = (item: ComplexSport) => {
-    const draft = drafts[item.sportId];
+  // Add selected master sport to this complex
+  const addSport = async (item: MasterSport) => {
+    if (!token) return;
+
+    const existingSport = sports.find(
+      sport => sport.name.toLowerCase() === item.name.toLowerCase(),
+    );
+
+    if (existingSport) {
+      if (!existingSport.isActive) {
+        Alert.alert(
+          'Sport Inactive',
+          `${item.name} is already added but inactive. Would you like to activate it?`,
+          [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Activate',
+              onPress: () => updateSportStatus(existingSport, true),
+            },
+          ],
+        );
+      } else {
+        Alert.alert(
+          'Already Added',
+          'This sport is already available in your complex.',
+        );
+      }
+
+      return;
+    }
+
+    try {
+      setAddingSportId(item._id);
+
+      await apiRequest('/sports', {
+        method: 'POST',
+        token,
+        body: JSON.stringify({
+          complexId,
+          name: item.name,
+          icon: item.icon || '',
+          description: item.description || '',
+          bookingWindowDays: 30,
+        }),
+      });
+
+      Alert.alert('Success', `${item.name} added successfully.`);
+
+      await loadData();
+    } catch (error: any) {
+      Alert.alert(
+        'Unable to Add Sport',
+        error.message || 'Something went wrong.',
+      );
+    } finally {
+      setAddingSportId(null);
+    }
+  };
+
+  const savePricing = async (item: SportItem) => {
+    if (!token) return;
+
+    const draft = drafts[item._id];
 
     if (!draft) return;
 
-    const pricing = {
-      weekdayNormalRate: Number(draft.weekdayNormalRate),
-      weekdayPeakRate: Number(draft.weekdayPeakRate),
-      weekendNormalRate: Number(draft.weekendNormalRate),
-      weekendPeakRate: Number(draft.weekendPeakRate),
-      peakHours: item.pricing.peakHours || [],
-      weekendDays: item.pricing.weekendDays || [0, 6],
-    };
-
     const rates = [
-      pricing.weekdayNormalRate,
-      pricing.weekdayPeakRate,
-      pricing.weekendNormalRate,
-      pricing.weekendPeakRate,
+      draft.weekdayNormalRate,
+      draft.weekdayPeakRate,
+      draft.weekendNormalRate,
+      draft.weekendPeakRate,
     ];
 
-    if (!rates.every(n => Number.isFinite(n) && n > 0)) {
+    if (
+      !rates.every(
+        value =>
+          value.trim() !== '' &&
+          Number.isFinite(Number(value)) &&
+          Number(value) >= 0,
+      )
+    ) {
       Alert.alert(
-        'Invalid pricing',
-        'Please enter a valid price greater than zero in all four fields.',
+        'Invalid Pricing',
+        'Please enter valid prices in all four fields.',
       );
       return;
     }
 
-    updateSport(complex.id, item.sportId, {
-      pricing,
-      pricePerHour: pricing.weekdayNormalRate,
-    });
+    const pricing = {
+      weekdayPrice: Number(draft.weekdayNormalRate),
+      weekdayPeakPrice: Number(draft.weekdayPeakRate),
+      weekendPrice: Number(draft.weekendNormalRate),
+      weekendPeakPrice: Number(draft.weekendPeakRate),
+      weekendDays: item.pricing?.weekendDays ?? [0, 6],
+      peakHours: item.pricing?.peakHours ?? [],
+    };
+
+    try {
+      setSavingSportId(item._id);
+
+      await apiRequest(`/sports/${item._id}/pricing`, {
+        method: 'PATCH',
+        token,
+        body: JSON.stringify(pricing),
+      });
+
+      Alert.alert(
+        'Pricing Updated',
+        `${item.name} pricing has been saved successfully.`,
+      );
+
+      await loadData();
+    } catch (error: any) {
+      Alert.alert(
+        'Update Failed',
+        error.message || 'Unable to update pricing.',
+      );
+    } finally {
+      setSavingSportId(null);
+    }
+  };
+
+  const updateSportStatus = async (item: SportItem, isActive: boolean) => {
+    if (!token) return;
+
+    try {
+      setStatusSportId(item._id);
+
+      await apiRequest(`/sports/${item._id}/status`, {
+        method: 'PATCH',
+        token,
+        body: JSON.stringify({ isActive }),
+      });
+
+      Alert.alert(
+        'Success',
+        `${item.name} ${isActive ? 'activated' : 'deactivated'} successfully.`,
+      );
+
+      await loadData();
+    } catch (error: any) {
+      Alert.alert(
+        'Status Update Failed',
+        error.message || 'Unable to update sport status.',
+      );
+    } finally {
+      setStatusSportId(null);
+    }
+  };
+
+  const confirmStatusChange = (item: SportItem) => {
+    const nextStatus = !item.isActive;
 
     Alert.alert(
-      'Pricing updated',
-      `${item.sportName} dynamic pricing has been saved.`,
+      nextStatus ? 'Activate Sport?' : 'Deactivate Sport?',
+      nextStatus
+        ? `Make ${item.name} available again?`
+        : `Customers will no longer see ${item.name} as an active sport.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: nextStatus ? 'Activate' : 'Deactivate',
+          style: nextStatus ? 'default' : 'destructive',
+          onPress: () => updateSportStatus(item, nextStatus),
+        },
+      ],
     );
   };
+
+  if (loading) {
+    return (
+      <View style={S.center}>
+        <ActivityIndicator size="large" color={G} />
+        <Text style={{ color: '#718078', marginTop: 12 }}>
+          Loading sports...
+        </Text>
+      </View>
+    );
+  }
+
+  if (!complex) {
+    return (
+      <View style={S.center}>
+        <Text style={S.name}>Complex not found</Text>
+
+        <TouchableOpacity style={S.retryButton} onPress={loadData}>
+          <Text style={S.saveText}>Retry</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
   return (
     <View style={{ flex: 1, backgroundColor: BG }}>
@@ -173,7 +381,7 @@ export default function SportsManagementScreen({ route, navigation }: Props) {
         <View>
           <Text style={S.title}>Sports & Pricing</Text>
           <Text style={S.headerSub}>
-            {complex.name} • {complex.sports.length} sports
+            {complex.name} • {sports.length} sports
           </Text>
         </View>
       </View>
@@ -181,32 +389,62 @@ export default function SportsManagementScreen({ route, navigation }: Props) {
       <ScrollView contentContainerStyle={{ padding: 17, paddingBottom: 35 }}>
         <Text style={S.section}>Manage sports & dynamic pricing</Text>
 
-        {complex.sports.map(item => {
-          const admin = admins.find(x => x.id === item.primarySubAdminId);
-          const draft = drafts[item.sportId] || toDraft(item.pricing);
+        {sports.length === 0 && (
+          <View style={S.emptyCard}>
+            <Text style={S.emptyTitle}>No sports added yet</Text>
+            <Text style={S.emptyText}>
+              Add your first sport to start managing bookings and pricing.
+            </Text>
+          </View>
+        )}
+
+        {sports.map(item => {
+          const admin = item.primarySubAdminId;
+          const draft = drafts[item._id] || toDraft(item.pricing);
+          const isSaving = savingSportId === item._id;
+          const isChangingStatus = statusSportId === item._id;
 
           return (
-            <View key={item.id} style={S.card}>
+            <View key={item._id} style={S.card}>
               <TouchableOpacity
                 activeOpacity={0.85}
                 onPress={() =>
                   navigation.navigate('SportDetails', {
-                    complexId: complex.id,
-                    sportId: item.sportId,
+                    complexId,
+                    sportId: item._id,
                   })
                 }
               >
                 <View style={S.row}>
                   <View style={S.icon}>
-                    <Text style={{ fontSize: 25 }}>{item.icon}</Text>
+                    <Text style={{ fontSize: 25 }}>{item.icon || '🏅'}</Text>
                   </View>
 
                   <View style={{ flex: 1 }}>
-                    <Text style={S.name}>{item.sportName}</Text>
+                    <Text style={S.name}>{item.name}</Text>
                     <Text style={S.sub}>
-                      {admin
+                      {admin?.name
                         ? `Primary: ${admin.name}`
                         : 'Primary subadmin not assigned'}
+                    </Text>
+                  </View>
+
+                  <View
+                    style={[
+                      S.statusPill,
+                      {
+                        backgroundColor: item.isActive ? '#DCFCE7' : '#FEE2E2',
+                      },
+                    ]}
+                  >
+                    <Text
+                      style={{
+                        color: item.isActive ? '#166534' : '#B91C1C',
+                        fontSize: 9,
+                        fontWeight: '900',
+                      }}
+                    >
+                      {item.isActive ? 'ACTIVE' : 'INACTIVE'}
                     </Text>
                   </View>
 
@@ -226,10 +464,11 @@ export default function SportsManagementScreen({ route, navigation }: Props) {
 
                     <View style={S.inputWrap}>
                       <Text style={S.rupee}>₹</Text>
+
                       <TextInput
                         value={draft[field.key]}
                         onChangeText={value =>
-                          updateDraft(item.sportId, field.key, value)
+                          updateDraft(item._id, field.key, value)
                         }
                         keyboardType="number-pad"
                         style={S.input}
@@ -243,13 +482,15 @@ export default function SportsManagementScreen({ route, navigation }: Props) {
 
               <View style={S.infoBox}>
                 <Text style={S.infoText}>
-                  Configure peak time and weekend days from Sport Details.
+                  Configure peak time, weekend days and slots from Sport
+                  Details.
                 </Text>
+
                 <TouchableOpacity
                   onPress={() =>
                     navigation.navigate('SportDetails', {
-                      complexId: complex.id,
-                      sportId: item.sportId,
+                      complexId,
+                      sportId: item._id,
                     })
                   }
                 >
@@ -258,10 +499,18 @@ export default function SportsManagementScreen({ route, navigation }: Props) {
               </View>
 
               <TouchableOpacity
-                style={S.saveButton}
+                style={[
+                  S.saveButton,
+                  (!item.isActive || isSaving) && { opacity: 0.6 },
+                ]}
+                disabled={!item.isActive || isSaving}
                 onPress={() => savePricing(item)}
               >
-                <Text style={S.saveText}>Save pricing</Text>
+                {isSaving ? (
+                  <ActivityIndicator color="#FFF" />
+                ) : (
+                  <Text style={S.saveText}>Save pricing</Text>
+                )}
               </TouchableOpacity>
 
               <View style={S.actions}>
@@ -269,43 +518,105 @@ export default function SportsManagementScreen({ route, navigation }: Props) {
                   {item.slots?.length || 0} configured slots
                 </Text>
 
-                <TouchableOpacity onPress={() => remove(item)}>
-                  <Text style={S.remove}>Remove sport</Text>
+                <TouchableOpacity
+                  disabled={isChangingStatus}
+                  onPress={() => confirmStatusChange(item)}
+                >
+                  {isChangingStatus ? (
+                    <ActivityIndicator size="small" color={G} />
+                  ) : (
+                    <Text
+                      style={[
+                        S.remove,
+                        item.isActive && { color: '#DC2626' },
+                        !item.isActive && { color: '#166534' },
+                      ]}
+                    >
+                      {item.isActive ? 'Deactivate sport' : 'Activate sport'}
+                    </Text>
+                  )}
                 </TouchableOpacity>
               </View>
             </View>
           );
         })}
 
-        <Text style={S.section}>Add another sport</Text>
+        {/* Dynamic Master Sports */}
+        <View style={S.addHeader}>
+          <View>
+            <Text style={S.section}>Add another sport</Text>
+            <Text style={S.addSub}>
+              Select a sport from the available sports list.
+            </Text>
+          </View>
 
-        <View style={S.grid}>
-          {AVAILABLE_SPORTS.map(item => {
-            const exists = complex.sports.some(s => s.sportId === item.id);
-
-            return (
-              <TouchableOpacity
-                key={item.id}
-                disabled={exists}
-                onPress={() => add(item)}
-                style={[S.option, exists && { opacity: 0.4 }]}
-              >
-                <Text style={{ fontSize: 25 }}>{item.icon}</Text>
-                <Text style={S.optionName}>{item.name}</Text>
-                <Text style={S.link}>
-                  {exists ? 'Already added' : '＋ Add sport'}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
+          <TouchableOpacity onPress={loadData}>
+            <Text style={S.refreshText}>↻ Refresh</Text>
+          </TouchableOpacity>
         </View>
+
+        {loadingMasterSports ? (
+          <ActivityIndicator
+            size="large"
+            color={G}
+            style={{ marginVertical: 25 }}
+          />
+        ) : masterSports.length === 0 ? (
+          <View style={S.emptyCard}>
+            <Text style={S.emptyTitle}>No available sports</Text>
+            <Text style={S.emptyText}>
+              No active sports found in the master sports list.
+            </Text>
+          </View>
+        ) : (
+          <View style={S.grid}>
+            {masterSports.map(item => {
+              const existing = sports.find(
+                sport => sport.name.toLowerCase() === item.name.toLowerCase(),
+              );
+
+              const isAdding = addingSportId === item._id;
+
+              return (
+                <TouchableOpacity
+                  key={item._id}
+                  disabled={!!existing || isAdding}
+                  onPress={() => addSport(item)}
+                  style={[S.option, existing && { opacity: 0.5 }]}
+                >
+                  {isAdding ? (
+                    <ActivityIndicator color={G} />
+                  ) : (
+                    <Text style={{ fontSize: 25 }}>{item.icon || '🏅'}</Text>
+                  )}
+
+                  <Text style={S.optionName}>{item.name}</Text>
+
+                  <Text style={S.link}>
+                    {existing
+                      ? existing.isActive
+                        ? 'Already added'
+                        : 'Inactive - Reactivate'
+                      : '＋ Add sport'}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        )}
       </ScrollView>
     </View>
   );
 }
 
 const S: any = {
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  center: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: BG,
+    padding: 20,
+  },
   header: {
     backgroundColor: G,
     paddingTop: 45,
@@ -344,7 +655,12 @@ const S: any = {
   },
   name: { fontSize: 15, fontWeight: '900', color: '#17251B' },
   sub: { fontSize: 10, color: '#718078', marginTop: 4 },
-  arrow: { fontSize: 26, color: '#718078' },
+  arrow: { fontSize: 26, color: '#718078', marginLeft: 5 },
+  statusPill: {
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 20,
+  },
   pricingHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -416,6 +732,7 @@ const S: any = {
     paddingTop: 10,
     flexDirection: 'row',
     justifyContent: 'space-between',
+    alignItems: 'center',
   },
   slotCount: { fontSize: 10, color: '#718078' },
   remove: { color: '#DC2626', fontSize: 10, fontWeight: '900' },
@@ -439,5 +756,52 @@ const S: any = {
     marginTop: 7,
     fontSize: 12,
   },
-  link: { color: '#166534', fontSize: 10, fontWeight: '900', marginTop: 6 },
+  link: {
+    color: '#166534',
+    fontSize: 10,
+    fontWeight: '900',
+    marginTop: 6,
+  },
+  emptyCard: {
+    backgroundColor: '#FFF',
+    borderRadius: 14,
+    padding: 20,
+    alignItems: 'center',
+    marginBottom: 15,
+  },
+  emptyTitle: {
+    color: '#17251B',
+    fontWeight: '900',
+    fontSize: 15,
+  },
+  emptyText: {
+    color: '#718078',
+    fontSize: 12,
+    textAlign: 'center',
+    marginTop: 7,
+  },
+  retryButton: {
+    backgroundColor: G,
+    paddingHorizontal: 25,
+    paddingVertical: 12,
+    borderRadius: 10,
+    marginTop: 15,
+  },
+  addHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 8,
+    marginBottom: 5,
+  },
+  addSub: {
+    color: '#718078',
+    fontSize: 11,
+    marginBottom: 10,
+  },
+  refreshText: {
+    color: G,
+    fontSize: 12,
+    fontWeight: '900',
+  },
 };

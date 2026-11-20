@@ -1,10 +1,8 @@
 import React from 'react';
-
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import LoginScreen from '../screens/auth/LoginScreen';
 import SignupScreen from '../screens/auth/SignupScreen';
-import AdminStack from './AdminStack';
 
 import { AuthStackParamList } from './types';
 
@@ -22,7 +20,6 @@ const AuthNavigator = () => {
       <Stack.Screen name="Login" component={LoginScreen} />
 
       <Stack.Screen name="Signup" component={SignupScreen} />
-      <Stack.Screen name="Admin" component={AdminStack} />
     </Stack.Navigator>
   );
 };

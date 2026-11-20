@@ -22,47 +22,61 @@ import { Colors } from '../../theme';
 
 type Props = NativeStackScreenProps<AuthStackParamList, 'Login'>;
 
-const LoginScreen: React.FC<Props> = ({ navigation }) => {
-  const { loginWithPhone } = useAuth();
+const LoginScreen: React.FC<Props> = ({ navigation, route }) => {
+  const { requestOtp, verifyOtp } = useAuth();
 
-  const [mobile, setMobile] = useState('');
+  const [mobile, setMobile] = useState(route.params?.phone || '');
   const [otp, setOtp] = useState('');
   const [otpSent, setOtpSent] = useState(false);
+  const [loading, setLoading] = useState(false);
 
-  const handleSendOtp = () => {
+  const handleSendOtp = async () => {
     if (!/^[0-9]{10}$/.test(mobile)) {
       Alert.alert('Validation', 'Please enter a valid 10-digit mobile number');
       return;
     }
 
-    // Demo OTP flow
-    setOtp('');
-    setOtpSent(true);
+    try {
+      setLoading(true);
 
-    //Alert.alert('OTP Sent', 'Your demo OTP is 123456');
+      const devOtp = await requestOtp(mobile);
+
+      setOtp('');
+      setOtpSent(true);
+
+      Alert.alert(
+        'OTP Sent',
+        devOtp
+          ? `Development OTP: ${devOtp}`
+          : `OTP has been sent to +91 ${mobile}`,
+      );
+    } catch (error: any) {
+      Alert.alert('OTP Failed', error?.message || 'Unable to send OTP');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const handleVerifyOtp = () => {
+  const handleVerifyOtp = async () => {
     if (!/^[0-9]{6}$/.test(otp)) {
       Alert.alert('Validation', 'Please enter a valid 6-digit OTP');
       return;
     }
 
-    // Demo OTP verification
-    if (otp !== '123456') {
-      Alert.alert('Invalid OTP', 'Please enter correct OTP');
-      return;
+    try {
+      setLoading(true);
+
+      await verifyOtp(mobile, otp);
+
+      // RootNavigator automatically navigates according to user role.
+    } catch (error: any) {
+      Alert.alert(
+        'Login Failed',
+        error?.message || 'Invalid OTP. Please try again.',
+      );
+    } finally {
+      setLoading(false);
     }
-
-    const success = loginWithPhone(mobile);
-
-    if (!success) {
-      Alert.alert('Login Failed', 'Unable to login with this mobile number');
-      return;
-    }
-
-    // AuthContext updates user.
-    // RootNavigator automatically opens MainNavigator.
   };
 
   const handleChangeNumber = () => {
@@ -70,13 +84,25 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
     setOtp('');
   };
 
-  const handleResendOtp = () => {
-    if (!mobile) {
-      return;
-    }
+  const handleResendOtp = async () => {
+    try {
+      setLoading(true);
 
-    setOtp('');
-    //Alert.alert('OTP Sent', 'Your new demo OTP is 123456');
+      const devOtp = await requestOtp(mobile);
+
+      setOtp('');
+
+      Alert.alert(
+        'OTP Sent',
+        devOtp
+          ? `Your new development OTP is ${devOtp}`
+          : `A new OTP has been sent to +91 ${mobile}`,
+      );
+    } catch (error: any) {
+      Alert.alert('Resend Failed', error?.message || 'Unable to resend OTP');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -90,7 +116,6 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.content}
         >
-          {/* Logo */}
           <View style={styles.logoContainer}>
             <View style={styles.logo}>
               <AppText color={Colors.white} variant="h1">
@@ -105,7 +130,6 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
             </AppText>
           </View>
 
-          {/* Login Form */}
           <View style={styles.form}>
             <AppText variant="h1">
               {otpSent ? 'Verify OTP' : 'Welcome Back!'}
@@ -114,7 +138,7 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
             <AppText color={Colors.textSecondary} style={styles.subtitle}>
               {otpSent
                 ? `Enter the 6-digit OTP sent to +91 ${mobile}`
-                : 'Login using your mobile number.'}
+                : 'Login using your registered mobile number.'}
             </AppText>
 
             {!otpSent ? (
@@ -130,9 +154,10 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
                 />
 
                 <AppButton
-                  title="Send OTP"
+                  title={loading ? 'Sending OTP...' : 'Send OTP'}
                   onPress={handleSendOtp}
                   style={styles.loginButton}
+                  disabled={loading}
                 />
               </>
             ) : (
@@ -148,14 +173,16 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
                 />
 
                 <AppButton
-                  title="Verify & Login"
+                  title={loading ? 'Verifying...' : 'Verify & Login'}
                   onPress={handleVerifyOtp}
                   style={styles.loginButton}
+                  disabled={loading}
                 />
 
                 <TouchableOpacity
                   style={styles.changeNumber}
                   onPress={handleChangeNumber}
+                  disabled={loading}
                 >
                   <AppText color={Colors.accentDark} variant="bodyMedium">
                     Change Mobile Number
@@ -165,6 +192,7 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
                 <TouchableOpacity
                   style={styles.resend}
                   onPress={handleResendOtp}
+                  disabled={loading}
                 >
                   <AppText color={Colors.accent} variant="bodyMedium">
                     Resend OTP
@@ -173,29 +201,24 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
               </>
             )}
 
-            {/* Signup */}
-            <View style={styles.footer}>
-              <AppText color={Colors.textSecondary}>
-                Don't have an account?{' '}
-              </AppText>
+            {!otpSent && (
+              <>
+                <View style={styles.adminSection}>
+                  <AppText color={Colors.textSecondary}>
+                    Own or manage a sports complex?
+                  </AppText>
 
-              <TouchableOpacity onPress={() => navigation.navigate('Signup')}>
-                <AppText color={Colors.accentDark} variant="bodyMedium">
-                  Sign Up
-                </AppText>
-              </TouchableOpacity>
-            </View>
-
-            {/* Admin Login */}
-            <TouchableOpacity
-              style={styles.adminLogin}
-              onPress={() => navigation.navigate('Admin')}
-              activeOpacity={0.8}
-            >
-              <AppText color={Colors.accentDark} variant="bodyMedium">
-                Login as Complex / Sport Admin
-              </AppText>
-            </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.adminRegister}
+                    onPress={() => navigation.navigate('Signup')}
+                  >
+                    <AppText color={Colors.accentDark} variant="bodyMedium">
+                      Register as Complex Admin
+                    </AppText>
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -255,9 +278,17 @@ const styles = StyleSheet.create({
     marginTop: 28,
   },
 
-  adminLogin: {
+  adminSection: {
+    alignItems: 'center',
+    marginTop: 28,
+    paddingTop: 22,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+  },
+
+  adminRegister: {
     alignSelf: 'center',
-    marginTop: 22,
+    marginTop: 12,
     paddingVertical: 12,
     paddingHorizontal: 16,
     borderRadius: 12,

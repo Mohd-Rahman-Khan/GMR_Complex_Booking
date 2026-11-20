@@ -38,6 +38,10 @@ export type MainStackParamList = {
   BookingSummary: {
     groundId: string;
     sportId: string;
+    groundName: string;
+    sportName: string;
+    sportIcon?: string;
+    groundLocation?: string;
     bookingDate: string;
     startTime: string;
     endTime: string;

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -8,16 +8,53 @@ import {
   Image,
   StyleSheet,
   StatusBar,
+  ActivityIndicator,
 } from 'react-native';
+
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
 import ScreenWrapper from '../../components/ScreenWrapper';
-import { sports } from '../../data/sports';
-import { grounds } from '../../data/grounds';
 import { MainStackParamList } from '../../navigation/types';
+import { apiRequest } from '../../services/api';
 
 type NavigationProp = NativeStackNavigationProp<MainStackParamList>;
+
+type MasterSport = {
+  _id: string;
+  name: string;
+  slug?: string;
+  icon?: string;
+  description?: string;
+};
+
+type ComplexSport = {
+  _id: string;
+  masterSportId?: string;
+  name: string;
+  icon?: string;
+  isActive?: boolean;
+  slots?: {
+    price?: number;
+  }[];
+  pricing?: any;
+};
+
+type Complex = {
+  _id: string;
+  name: string;
+  ownerName?: string;
+  address?: string;
+  city?: string;
+  description?: string;
+  image?: string;
+  images?: string[];
+  rating?: number;
+  openingTime?: string;
+  closingTime?: string;
+  isActive?: boolean;
+  sports: ComplexSport[];
+};
 
 const C = {
   bg: '#F5F7F4',
@@ -35,43 +72,162 @@ const C = {
 const ExploreScreen = () => {
   const navigation = useNavigation<NavigationProp>();
   const route = useRoute<any>();
+
   const initialSportId = route.params?.sportId;
 
   const [selectedSport, setSelectedSport] = useState<string>(
     initialSportId || 'all',
   );
+
   const [search, setSearch] = useState('');
+  const [sports, setSports] = useState<MasterSport[]>([]);
+  const [complexes, setComplexes] = useState<Complex[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     setSelectedSport(initialSportId || 'all');
   }, [initialSportId]);
 
+  const fetchExploreData = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError('');
+
+      // 1. Fetch master sports
+      const sportsResponse: any = await apiRequest('/master-sports');
+
+      const masterSports: MasterSport[] = sportsResponse?.data?.sports || [];
+
+      setSports(masterSports);
+
+      // 2. Fetch all active complexes
+      const complexResponse: any = await apiRequest('/complexes');
+
+      const allComplexes = complexResponse?.data?.complexes || [];
+
+      // 3. Fetch sports of every complex
+      const complexResults = await Promise.all(
+        allComplexes.map(async (complex: any) => {
+          try {
+            const response: any = await apiRequest(
+              `/sports/complex/${complex._id}`,
+            );
+
+            const complexSports: ComplexSport[] = response?.data?.sports || [];
+
+            return {
+              ...complex,
+              sports: complexSports.filter(
+                (sport: ComplexSport) => sport.isActive !== false,
+              ),
+            };
+          } catch (err) {
+            console.log(`Sports fetch failed for ${complex.name}:`, err);
+
+            return {
+              ...complex,
+              sports: [],
+            };
+          }
+        }),
+      );
+
+      setComplexes(
+        complexResults.filter((item: Complex) => item.isActive !== false),
+      );
+    } catch (err: any) {
+      console.log('Explore API error:', err);
+      setError(err?.message || 'Unable to load complexes');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchExploreData();
+  }, [fetchExploreData]);
+
+  // Check whether complex has selected sport
+  const hasSelectedSport = (complex: Complex, masterSport: MasterSport) => {
+    return complex.sports?.some(sport => {
+      const sameId = sport.masterSportId === masterSport._id;
+
+      const sameName =
+        sport.name?.trim().toLowerCase() ===
+        masterSport.name?.trim().toLowerCase();
+
+      return sameId || sameName;
+    });
+  };
+
+  // Get minimum session price from complex sports
+  const getStartingPrice = (complex: Complex) => {
+    const prices: number[] = [];
+
+    complex.sports?.forEach(sport => {
+      sport.slots?.forEach(slot => {
+        const price = Number(slot.price);
+
+        if (Number.isFinite(price) && price > 0) {
+          prices.push(price);
+        }
+      });
+
+      // Support pricing as an array or object
+      if (Array.isArray(sport.pricing)) {
+        sport.pricing.forEach((item: any) => {
+          const price = Number(item.price);
+
+          if (Number.isFinite(price) && price > 0) {
+            prices.push(price);
+          }
+        });
+      } else if (sport.pricing && typeof sport.pricing === 'object') {
+        const price = Number(sport.pricing.price);
+
+        if (Number.isFinite(price) && price > 0) {
+          prices.push(price);
+        }
+      }
+    });
+
+    return prices.length ? Math.min(...prices) : 0;
+  };
+
+  // Filter complexes
   const filteredGrounds = useMemo(() => {
     const query = search.trim().toLowerCase();
-    return grounds
-      .filter(item => {
+
+    return complexes
+      .filter(complex => {
         const matchesSport =
-          selectedSport === 'all' || item.sportId === selectedSport;
+          selectedSport === 'all' ||
+          sports.some(
+            masterSport =>
+              masterSport._id === selectedSport &&
+              hasSelectedSport(complex, masterSport),
+          );
+
+        const complexSportsNames =
+          complex.sports?.map(sport => sport.name).join(' ') || '';
+
         const matchesSearch =
           !query ||
-          item.name.toLowerCase().includes(query) ||
-          item.sportName.toLowerCase().includes(query) ||
-          item.location.toLowerCase().includes(query);
-        return item.status === 'active' && matchesSport && matchesSearch;
-      })
-      .sort((a, b) => b.rating - a.rating);
-  }, [selectedSport, search]);
+          complex.name?.toLowerCase().includes(query) ||
+          complex.address?.toLowerCase().includes(query) ||
+          complex.city?.toLowerCase().includes(query) ||
+          complexSportsNames.toLowerCase().includes(query);
 
-  const getStartingPrice = (item: (typeof grounds)[number]) => {
-    const prices =
-      item.slots?.map(slot => slot.price).filter(Number.isFinite) ?? [];
-    return prices.length ? Math.min(...prices) : item.price;
-  };
+        return matchesSport && matchesSearch;
+      })
+      .sort((a, b) => (b.rating || 0) - (a.rating || 0));
+  }, [complexes, selectedSport, search, sports]);
 
   const selectedSportName =
     selectedSport === 'all'
       ? 'All playing fields'
-      : sports.find(item => item.id === selectedSport)?.name ||
+      : sports.find(item => item._id === selectedSport)?.name ||
         'Selected sport';
 
   const resetFilters = () => {
@@ -79,9 +235,21 @@ const ExploreScreen = () => {
     setSearch('');
   };
 
+  const getComplexSportNames = (complex: Complex) => {
+    return (
+      complex.sports?.map(sport => sport.name).join(', ') ||
+      'Sports information unavailable'
+    );
+  };
+
+  const getComplexImage = (complex: Complex) => {
+    return complex.image || complex.images?.[0] || '';
+  };
+
   return (
     <ScreenWrapper style={styles.screen}>
       <StatusBar barStyle="light-content" backgroundColor={C.dark} />
+
       <ScrollView
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
@@ -90,18 +258,23 @@ const ExploreScreen = () => {
         {/* Editorial hero */}
         <View style={styles.hero}>
           <View style={styles.heroGlow} />
+
           <View style={styles.heroTopline}>
             <View style={styles.livePill}>
               <View style={styles.liveDot} />
               <Text style={styles.liveText}>GMR</Text>
             </View>
+
             <Text style={styles.heroMark}>SA.</Text>
           </View>
+
           <Text style={styles.heroEyebrow}>FIND YOUR NEXT GAME</Text>
           <Text style={styles.heroTitle}>The perfect{'\n'}place to play.</Text>
+
           <Text style={styles.heroSubtitle}>
             Explore local venues, compare sessions{'\n'}and get your game on.
           </Text>
+
           <View style={styles.heroBottomRow}>
             <View>
               <Text style={styles.heroStatNumber}>
@@ -109,11 +282,13 @@ const ExploreScreen = () => {
               </Text>
               <Text style={styles.heroStatLabel}>MATCHING VENUES</Text>
             </View>
+
             <View style={styles.heroDecoration}>
               <Text style={styles.heroBall}>⚽</Text>
               <View style={styles.heroOrbit} />
             </View>
           </View>
+
           <View style={styles.heroStripe} />
         </View>
 
@@ -122,6 +297,7 @@ const ExploreScreen = () => {
           <View style={styles.searchIconCircle}>
             <Text style={styles.searchIcon}>⌕</Text>
           </View>
+
           <TextInput
             value={search}
             onChangeText={setSearch}
@@ -130,6 +306,7 @@ const ExploreScreen = () => {
             style={styles.searchInput}
             returnKeyType="search"
           />
+
           {!!search && (
             <TouchableOpacity
               onPress={() => setSearch('')}
@@ -147,6 +324,7 @@ const ExploreScreen = () => {
             <Text style={styles.eyebrow}>PICK YOUR GAME</Text>
             <Text style={styles.sectionTitle}>Explore by sport</Text>
           </View>
+
           <TouchableOpacity onPress={resetFilters} activeOpacity={0.7}>
             <Text style={styles.resetText}>Reset ↗</Text>
           </TouchableOpacity>
@@ -173,6 +351,7 @@ const ExploreScreen = () => {
             >
               <Text style={styles.sportIcon}>✦</Text>
             </View>
+
             <Text
               style={[
                 styles.sportName,
@@ -182,13 +361,15 @@ const ExploreScreen = () => {
               All sports
             </Text>
           </TouchableOpacity>
+
           {sports.map(item => {
-            const active = selectedSport === item.id;
+            const active = selectedSport === item._id;
+
             return (
               <TouchableOpacity
-                key={item.id}
+                key={item._id}
                 activeOpacity={0.85}
-                onPress={() => setSelectedSport(item.id)}
+                onPress={() => setSelectedSport(item._id)}
                 style={[styles.sportTile, active && styles.sportTileActive]}
               >
                 <View
@@ -197,8 +378,9 @@ const ExploreScreen = () => {
                     active && styles.sportIconBoxActive,
                   ]}
                 >
-                  <Text style={styles.sportIcon}>{item.icon}</Text>
+                  <Text style={styles.sportIcon}>{item.icon || '🏅'}</Text>
                 </View>
+
                 <Text
                   style={[styles.sportName, active && styles.sportNameActive]}
                   numberOfLines={1}
@@ -216,6 +398,7 @@ const ExploreScreen = () => {
             <Text style={styles.eyebrow}>CURATED FOR YOUR GAME</Text>
             <Text style={styles.resultsTitle}>{selectedSportName}</Text>
           </View>
+
           <View style={styles.resultCount}>
             <Text style={styles.resultCountNumber}>
               {filteredGrounds.length}
@@ -224,94 +407,155 @@ const ExploreScreen = () => {
           </View>
         </View>
 
-        {/* Ground results */}
-        {filteredGrounds.length ? (
-          <View style={styles.groundList}>
-            {filteredGrounds.map((item, index) => (
-              <TouchableOpacity
-                key={item.id}
-                activeOpacity={0.92}
-                style={styles.groundCard}
-                onPress={() =>
-                  navigation.navigate('GroundDetails', { groundId: item.id })
-                }
-              >
-                <View style={styles.imageWrap}>
-                  <Image
-                    source={{ uri: item.image }}
-                    style={styles.groundImage}
-                    resizeMode="cover"
-                  />
-                  <View style={styles.imageShade} />
-                  <View style={styles.imageTopRow}>
-                    <View style={styles.imageSportPill}>
-                      <Text style={styles.imageSportText}>
-                        {item.sportName}
-                      </Text>
-                    </View>
-                    <View style={styles.ratingPill}>
-                      <Text style={styles.ratingStar}>★</Text>
-                      <Text style={styles.ratingValue}>{item.rating}</Text>
-                    </View>
-                  </View>
-                  <View style={styles.imageBottomRow}>
-                    <Text style={styles.imageIndex}>
-                      VENUE {String(index + 1).padStart(2, '0')}
-                    </Text>
-                    <View style={styles.venueActivePill}>
-                      <View style={styles.venueActiveDot} />
-                      <Text style={styles.venueActiveText}>ACTIVE</Text>
-                    </View>
-                  </View>
-                </View>
+        {/* Loading */}
+        {loading ? (
+          <View style={styles.emptyState}>
+            <ActivityIndicator size="large" color={C.green} />
+            <Text style={styles.emptyTitle}>Finding venues...</Text>
+            <Text style={styles.emptyDescription}>
+              Please wait while we load sports complexes.
+            </Text>
+          </View>
+        ) : error ? (
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyTitle}>Something went wrong</Text>
+            <Text style={styles.emptyDescription}>{error}</Text>
 
-                <View style={styles.cardBody}>
-                  <View style={styles.cardTitleRow}>
-                    <View style={styles.cardTitleCopy}>
-                      <Text style={styles.groundName} numberOfLines={1}>
-                        {item.name}
-                      </Text>
-                      <Text style={styles.location} numberOfLines={1}>
-                        ⌖ {item.location}
-                      </Text>
-                    </View>
-                    <View style={styles.openArrow}>
-                      <Text style={styles.openArrowText}>↗</Text>
-                    </View>
-                  </View>
-                  <View style={styles.cardDivider} />
-                  <View style={styles.cardFooter}>
-                    <View style={styles.hoursMeta}>
-                      <Text style={styles.hoursIcon}>◷</Text>
-                      <View>
-                        <Text style={styles.metaCaption}>OPENING HOURS</Text>
-                        <Text style={styles.metaValue}>
-                          {item.openingTime} – {item.closingTime}
+            <TouchableOpacity
+              style={styles.emptyButton}
+              onPress={fetchExploreData}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.emptyButtonText}>Try again</Text>
+            </TouchableOpacity>
+          </View>
+        ) : filteredGrounds.length ? (
+          <View style={styles.groundList}>
+            {filteredGrounds.map((item, index) => {
+              const image = getComplexImage(item);
+              const startingPrice = getStartingPrice(item);
+
+              return (
+                <TouchableOpacity
+                  key={item._id}
+                  activeOpacity={0.92}
+                  style={styles.groundCard}
+                  onPress={() =>
+                    navigation.navigate('GroundDetails', {
+                      groundId: item._id,
+                    })
+                  }
+                >
+                  <View style={styles.imageWrap}>
+                    {image ? (
+                      <Image
+                        source={{ uri: image }}
+                        style={styles.groundImage}
+                        resizeMode="cover"
+                      />
+                    ) : (
+                      <View style={styles.groundImageFallback}>
+                        <Text style={styles.fallbackIcon}>🏟️</Text>
+                        <Text style={styles.fallbackText}>GMR SPORTS</Text>
+                      </View>
+                    )}
+
+                    <View style={styles.imageShade} />
+
+                    <View style={styles.imageTopRow}>
+                      <View style={styles.imageSportPill}>
+                        <Text style={styles.imageSportText} numberOfLines={1}>
+                          {getComplexSportNames(item)}
+                        </Text>
+                      </View>
+
+                      <View style={styles.ratingPill}>
+                        <Text style={styles.ratingStar}>★</Text>
+                        <Text style={styles.ratingValue}>
+                          {item.rating ? item.rating.toFixed(1) : 'New'}
                         </Text>
                       </View>
                     </View>
-                    <View style={styles.priceMeta}>
-                      <Text style={styles.metaCaption}>SESSIONS FROM</Text>
-                      <Text style={styles.priceValue}>
-                        ₹{getStartingPrice(item).toLocaleString('en-IN')}
-                        <Text style={styles.priceUnit}> / slot</Text>
+
+                    <View style={styles.imageBottomRow}>
+                      <Text style={styles.imageIndex}>
+                        VENUE {String(index + 1).padStart(2, '0')}
                       </Text>
+
+                      <View style={styles.venueActivePill}>
+                        <View style={styles.venueActiveDot} />
+                        <Text style={styles.venueActiveText}>ACTIVE</Text>
+                      </View>
                     </View>
                   </View>
-                </View>
-              </TouchableOpacity>
-            ))}
+
+                  <View style={styles.cardBody}>
+                    <View style={styles.cardTitleRow}>
+                      <View style={styles.cardTitleCopy}>
+                        <Text style={styles.groundName} numberOfLines={1}>
+                          {item.name}
+                        </Text>
+
+                        <Text style={styles.location} numberOfLines={1}>
+                          ⌖{' '}
+                          {[item.address, item.city]
+                            .filter(Boolean)
+                            .join(', ') || 'Location not available'}
+                        </Text>
+                      </View>
+
+                      <View style={styles.openArrow}>
+                        <Text style={styles.openArrowText}>↗</Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.cardDivider} />
+
+                    <View style={styles.cardFooter}>
+                      <View style={styles.hoursMeta}>
+                        <Text style={styles.hoursIcon}>◷</Text>
+
+                        <View>
+                          <Text style={styles.metaCaption}>OPENING HOURS</Text>
+
+                          <Text style={styles.metaValue}>
+                            {item.openingTime || '--:--'} –{' '}
+                            {item.closingTime || '--:--'}
+                          </Text>
+                        </View>
+                      </View>
+
+                      <View style={styles.priceMeta}>
+                        <Text style={styles.metaCaption}>SESSIONS FROM</Text>
+
+                        <Text style={styles.priceValue}>
+                          {startingPrice > 0
+                            ? `₹${startingPrice.toLocaleString('en-IN')}`
+                            : 'Check price'}
+                          {startingPrice > 0 && (
+                            <Text style={styles.priceUnit}> / slot</Text>
+                          )}
+                        </Text>
+                      </View>
+                    </View>
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
           </View>
         ) : (
           <View style={styles.emptyState}>
             <View style={styles.emptyIconCircle}>
               <Text style={styles.emptyIcon}>⌕</Text>
             </View>
-            <Text style={styles.emptyTitle}>No grounds found</Text>
+
+            <Text style={styles.emptyTitle}>No complexes found</Text>
+
             <Text style={styles.emptyDescription}>
               Try a different keyword or choose another sport to discover more
               venues.
             </Text>
+
             <TouchableOpacity
               style={styles.emptyButton}
               onPress={resetFilters}
@@ -326,13 +570,16 @@ const ExploreScreen = () => {
           <View style={styles.noteIconCircle}>
             <Text style={styles.noteIcon}>✦</Text>
           </View>
+
           <View style={styles.noteCopy}>
             <Text style={styles.noteTitle}>Every game has its place.</Text>
+
             <Text style={styles.noteText}>
               Session timings and prices are set individually by each venue.
             </Text>
           </View>
         </View>
+
         <View style={styles.bottomSpace} />
       </ScrollView>
     </ScreenWrapper>
@@ -752,6 +999,26 @@ const styles = StyleSheet.create({
   noteTitle: { color: C.dark, fontSize: 10, fontWeight: '900' },
   noteText: { color: '#64766A', fontSize: 9, lineHeight: 14, marginTop: 3 },
   bottomSpace: { height: 15 },
+
+  groundImageFallback: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#183B2A',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  fallbackIcon: {
+    fontSize: 42,
+    marginBottom: 8,
+  },
+
+  fallbackText: {
+    color: '#D9F36A',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 2,
+  },
 });
 
 export default ExploreScreen;

@@ -56,6 +56,7 @@ export const getSportPricing = (
   complexes: SportsComplex[],
 ): SportPricing => {
   const complex = getAdminComplexForGround(complexes, ground.id);
+  //const complex = getAdminComplexForGround(complexes, ground.id);
   const adminSport = complex?.sports.find(
     item => ADMIN_TO_GROUND_SPORT[item.sportId] === sport.sportId,
   );
@@ -163,10 +164,7 @@ export const calculateDynamicPrice = (
   }));
 
   return {
-    total: roundMoney(
-      breakdown.reduce((sum, item) => sum + item.amount, 0),
-    ),
+    total: roundMoney(breakdown.reduce((sum, item) => sum + item.amount, 0)),
     breakdown,
   };
 };
-
